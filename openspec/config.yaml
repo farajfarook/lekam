@@ -1,0 +1,27 @@
+schema: spec-driven
+
+context: |
+  Lekam is a human-gated front door for coding agents. Anyone can talk to it in
+  chat; nothing with tools runs until the owner approves; approved work is
+  executed by agents on a Paseo daemon.
+
+  Hard constraints every artifact must respect:
+  - The orchestrator LLM NEVER has tools, MCP servers or network access beyond
+    the single chat-completion call. It returns structured JSON; deterministic
+    code decides what happens next.
+  - No agent with tools starts until a configured owner has approved via a
+    signed interactive action. Timeouts and ambiguity default to deny.
+  - Secrets come from environment variables named in config, never from files.
+  - Nothing owner- or employer-specific is hard-coded; everything personal lives
+    in lekam.yml, persona.md and guardrails.md.
+  - Runtime: Node 22 ESM, no build step, node:sqlite for storage, node:test for tests.
+  - Keep the three seams (chat adapter, brain, executor) behind interfaces so
+    other chat platforms, LLM endpoints and executors can be added.
+
+rules:
+  proposal:
+    - State what is out of scope for the phase
+  specs:
+    - Write scenarios only where behaviour is subtle (state transitions, security, routing); bullet requirements elsewhere
+  tasks:
+    - Each task names the files it touches and the test that proves it
