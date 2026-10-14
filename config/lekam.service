@@ -1,0 +1,21 @@
+# systemd user unit. Install:
+#   mkdir -p ~/.config/systemd/user && cp config/lekam.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now lekam
+# Secrets: put LEKAM_SLACK_BOT_TOKEN, LEKAM_SLACK_APP_TOKEN, LEKAM_BRAIN_KEY (and the brain URL var)
+# in the user environment, e.g. `systemctl --user import-environment LEKAM_SLACK_BOT_TOKEN ...`
+# from a shell where they are exported, or via a root-only EnvironmentFile outside the repo.
+[Unit]
+Description=Lekam - human-gated front door for coding agents
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/lekam
+ExecStart=/usr/bin/env node %h/lekam/src/cli.mjs run --config %h/lekam/lekam.yml
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=default.target

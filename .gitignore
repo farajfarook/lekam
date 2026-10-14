@@ -147,3 +147,9 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# lekam runtime
+*.db
+*.db-wal
+*.db-shm
+lekam.yml

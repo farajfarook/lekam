@@ -1,0 +1,81 @@
+# Lekam configuration. Copy to lekam.yml and edit. Secrets are NEVER put here:
+# every *_env key names an environment variable that holds the value.
+
+persona_file: ./persona.md        # the bot's voice and rules (prepended to every brain prompt)
+guardrails_file: ./guardrails.md  # prepended to every worker brief
+# catalogue_file: ./catalogue.md  # optional: replaces the auto-generated skills section
+
+chat:
+  platform: slack
+  bot_token_env: LEKAM_SLACK_BOT_TOKEN   # xoxb-...
+  app_token_env: LEKAM_SLACK_APP_TOKEN   # xapp-... (Socket Mode)
+  reactions:                             # status shown on the originating message
+    pending: eyes
+    running: gear
+    done: white_check_mark
+    declined: no_entry_sign
+    failed: x
+    needs_info: question
+
+brain:
+  base_url_env: LITELLM_RMS_URL          # OpenAI-compatible endpoint (LiteLLM, OpenAI, ...)
+  api_key_env: LEKAM_BRAIN_KEY
+  classify_model: claude-haiku-5-5
+  brief_model: claude-haiku-5-5          # may differ (e.g. a stronger model for briefs)
+  threshold: 0.7                         # owner-mentions below this never become cards
+  thread_context_messages: 20
+  recent_outcomes: 10
+  catalogue_max_chars: 16000
+  timeout_ms: 30000
+
+approvals:
+  ttl_bot_mention: 24h
+  ttl_owner_mention: 4h
+  auto_post_result_default: false
+  force_card_patterns:                   # regex; any match on a follow-up forces a new card
+    - "\\bPR\\b"
+    - "\\bdeploy"
+    - "\\bmerge\\b"
+    - "\\bprod\\b"
+    - "\\bjira\\b"
+    - "\\bemail\\b"
+    - "\\bdelete\\b"
+
+limits:
+  per_user_per_hour: 10
+  pending_per_owner: 20
+
+store:
+  path: ./lekam.db
+
+# Outward actions the brain may propose and the owner approves per request.
+outward_actions:
+  jira_comment: Comment on Jira
+  pr_create: Raise a pull request
+  slack_post: Post to Slack
+  email_send: Send email
+  deploy_approve: Approve a deployment
+
+# Repositories the brain may name in a brief.
+repos:
+  - name: example-app
+    url: https://github.com/acme/example-app
+    default_branch: main
+    notes: .NET API (api/) + React (ui/)
+
+# Directories scanned for */SKILL.md to build the brain's catalogue.
+skills_dirs:
+  - ~/.agents/skills
+
+owners:
+  - slack_id: U0000000000
+    name: Owner
+    default_for_channels: []             # bot-mentions in these channels route here
+    executor:
+      type: paseo
+      paseo_url: ws://127.0.0.1:6767/ws
+      provider: pi/litellm/claude-haiku-5-5   # "provider/model" as Paseo expects; `lekam check` lists options
+      cwd: /root/work
+      max_concurrent: 2
+      run_timeout: 45m
+      idle_archive_days: 7
