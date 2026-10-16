@@ -43,9 +43,12 @@ function briefBlocks({ request, config, selected }) {
   if (b.notes) lines.push(`*Notes:* ${trunc(b.notes, 600)}`);
   const blocks = [md(lines.join('\n'))];
   const ids = Object.keys(config.outward_actions);
-  if (ids.length) {
+  const proposed = selected ?? b.outward_actions ?? [];
+  if (ids.length && proposed.length === 0) {
+    blocks.push(ctx('_No outward actions: the agent only reports back. Use *Edit brief* to allow any._'));
+  } else if (ids.length) {
     const options = ids.map((id) => ({ text: { type: 'plain_text', text: config.outward_actions[id] }, value: id }));
-    const initial = options.filter((o) => (selected ?? b.outward_actions ?? []).includes(o.value));
+    const initial = options.filter((o) => proposed.includes(o.value));
     blocks.push({
       type: 'section', text: { type: 'mrkdwn', text: '*Outward actions the agent may take:*' },
       accessory: { type: 'checkboxes', action_id: ACTIONS.OUTWARD_SELECT, options, ...(initial.length ? { initial_options: initial } : {}) },

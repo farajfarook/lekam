@@ -31,3 +31,11 @@ test('briefFromView', () => {
   const b = briefFromView({ state: { values: { summary: { v: { value: ' S ' } }, skill: { v: { value: '' } }, repo: { v: { value: 'r' } }, notes: { v: { value: 'n' } }, outward: { v: { selected_options: [{ value: 'a' }] } } } } });
   assert.deepEqual(b, { summary: 'S', skill: null, repo: 'r', notes: 'n', outward_actions: ['a'] });
 });
+
+test('outward checkboxes only appear when the brief proposes some', () => {
+  const none = approvalCard({ request: { ...request, brief: { summary: 's', outward_actions: [] } }, config, requesterName: 'T' });
+  assert.ok(!JSON.stringify(none.blocks).includes('"type":"checkboxes","options"') || !JSON.stringify(none.blocks).includes('lekam_outward_select'));
+  assert.ok(JSON.stringify(none.blocks).includes('No outward actions'));
+  const some = approvalCard({ request: { ...request, brief: { summary: 's', outward_actions: ['pr_create'] } }, config, requesterName: 'T' });
+  assert.ok(JSON.stringify(some.blocks).includes('lekam_outward_select'));
+});
