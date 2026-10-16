@@ -215,7 +215,8 @@ test('a thread Lekam posted in before a restart is recognised from the thread it
 });
 
 test('card shows thread context when the trigger refers back', async () => {
-  const h = await harness();
+  let n = 0;
+  const h = await harness({ brainScript: () => (n++ === 0 ? cls({ intent: 'chitchat', reply_to_user: 'Hello.', brief: null }) : cls()) });
   h.chat.botUserId = 'UBOT';
   const first = await h.chat.inject({ kind: 'bot_mention', channel: CHAN, user: REQ, text: 'hello' });
   h.chat.thread(CHAN, first.thread_ts).push({ user: REQ, text: 'check open issues in owner portal', ts: '9' });
