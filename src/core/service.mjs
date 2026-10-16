@@ -15,10 +15,7 @@ export class Service {
   }
 
   async start() {
-    this.chat.setEngagedLookup((channel, thread_ts) => {
-      const r = this.store.findByThread(channel, thread_ts);
-      return (!!r && isEngaged(r.state)) || this.store.botSpokeRecently(channel, thread_ts, { withinMs: this.config.chat.thread_engagement_ms });
-    });
+    this.chat.setEngagedLookup((channel, thread_ts) => this.isEngagedThread(channel, thread_ts));
     this.chat.onMessage((m) => this.onMessage(m));
     this.chat.onAction((a) => this.onAction(a));
     this.chat.onView((v) => this.onView(v));
@@ -32,6 +29,18 @@ export class Service {
   async stop() { for (const t of this.timers) clearInterval(t); await this.chat.stop?.(); for (const e of this.executors.values()) await e.close?.(); }
 
   // ---------- helpers ----------
+  /** Engaged = live request, or Lekam posted in the thread within chat.thread_engagement (store first, then the thread itself). */
+  async isEngagedThread(channel, thread_ts) {
+    const r = this.store.findByThread(channel, thread_ts);
+    if (r && isEngaged(r.state)) return true;
+    const within = this.config.chat.thread_engagement_ms;
+    if (this.store.botSpokeRecently(channel, thread_ts, { withinMs: within })) return true;
+    if (!this.chat.botUserId) return false;
+    const msgs = await this.chat.fetchThread(channel, thread_ts, 50);
+    const last = msgs.filter((m) => m.user === this.chat.botUserId).map((m) => Number(m.ts) * 1000).sort((x, y) => y - x)[0];
+    if (last && Date.now() - last < within) { this.store.touchThread(channel, thread_ts, last); return true; }
+    return false;
+  }
   exec(ownerId) { const e = this.executors.get(ownerId); if (!e) throw new Error(`no executor for owner ${ownerId}`); return e; }
   ownerName(id) { return ownerById(this.config, id)?.name ?? id; }
   react(request, key) { return this.setReaction(request, this.config.chat.reactions[key]); }
@@ -82,7 +91,7 @@ export class Service {
     if (existing && isEngaged(existing.state) && (msg.kind === 'followup' || existing.state !== 'DONE')) return this.onFollowup(msg, existing);
     if (msg.kind === 'followup') {
       // No live request but Lekam spoke in this thread recently: treat the reply as addressed to it.
-      if (!this.store.botSpokeRecently(msg.channel, msg.thread_ts, { withinMs: this.config.chat.thread_engagement_ms })) return;
+      if (!(await this.isEngagedThread(msg.channel, msg.thread_ts))) return;
       msg = { ...msg, kind: 'bot_mention' };
     }
     return this.onNew(msg);

@@ -11,7 +11,7 @@ export function stripMentions(text = '') {
 export function mentions(text = '', id) { return new RegExp(`<@${id}(?:\\|[^>]*)?>`).test(text); }
 
 /** Pure: classify a raw Slack message event into {kind,...} or null. `isEngaged(channel,thread)` is a callback. */
-export function classifyEvent(ev, { botUserId, ownerIds, isEngaged }) {
+export async function classifyEvent(ev, { botUserId, ownerIds, isEngaged }) {
   if (!ev || ev.type !== 'message' && ev.type !== 'app_mention') return null;
   if (ev.subtype && IGNORED_SUBTYPES.has(ev.subtype)) return null;
   if (ev.bot_id || ev.user === botUserId || !ev.user) return null;
@@ -26,7 +26,7 @@ export function classifyEvent(ev, { botUserId, ownerIds, isEngaged }) {
     const owner = [...ownerIds].find((id) => mentions(text, id));
     if (owner) return { kind: 'owner_mention', owner, ...base };
   }
-  if (ev.thread_ts && isEngaged(channel, ev.thread_ts)) return { kind: 'followup', ...base };
+  if (ev.thread_ts && (await isEngaged(channel, ev.thread_ts))) return { kind: 'followup', ...base };
   return null;
 }
 
@@ -53,7 +53,7 @@ export class SlackAdapter {
     const handle = async (ev, event_id) => {
       const key = `${ev.channel}:${ev.ts}`;
       if (seen.has(key)) return; seen.add(key); setTimeout(() => seen.delete(key), 60_000);
-      const msg = classifyEvent(ev, { botUserId: this.botUserId, ownerIds: this.ownerIds, isEngaged: this.handlers.isEngaged });
+      const msg = await classifyEvent(ev, { botUserId: this.botUserId, ownerIds: this.ownerIds, isEngaged: this.handlers.isEngaged });
       if (!msg) return;
       msg.event_id = event_id;
       try { await this.handlers.message?.(msg); } catch (e) { this.log('error', `message handler failed: ${e.stack ?? e}`); }
