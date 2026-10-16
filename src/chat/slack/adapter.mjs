@@ -1,6 +1,7 @@
 // Slack adapter on @slack/bolt (Socket Mode). Filters events down to the three kinds core cares
 // about (bot_mention, owner_mention, followup) and exposes the small surface core needs.
 import { ACTIONS, EDIT_VIEW_ID } from '../../approvals/cards.mjs';
+import { toMrkdwn } from './mrkdwn.mjs';
 
 const IGNORED_SUBTYPES = new Set(['message_changed', 'message_deleted', 'channel_join', 'channel_leave', 'bot_message', 'message_replied', 'thread_broadcast', 'group_join', 'group_leave']);
 
@@ -88,18 +89,18 @@ export class SlackAdapter {
   async react(channel, ts, name) { try { await this.client.reactions.add({ channel, timestamp: ts, name }); } catch (e) { if (!/already_reacted/.test(e.message)) this.log('warn', `react failed: ${e.message}`); } }
   async unreact(channel, ts, name) { try { await this.client.reactions.remove({ channel, timestamp: ts, name }); } catch (e) { if (!/no_reaction/.test(e.message)) this.log('warn', `unreact failed: ${e.message}`); } }
   async post(channel, thread_ts, msg) {
-    const m = typeof msg === 'string' ? { text: msg } : msg;
+    const m = outgoing(msg);
     const r = await this.client.chat.postMessage({ channel, thread_ts, ...m });
     return { channel: r.channel, ts: r.ts };
   }
   async dm(user, msg, thread_ts = undefined) {
     const conv = await this.client.conversations.open({ users: user });
-    const m = typeof msg === 'string' ? { text: msg } : msg;
+    const m = outgoing(msg);
     const r = await this.client.chat.postMessage({ channel: conv.channel.id, ...(thread_ts ? { thread_ts } : {}), ...m });
     return { channel: r.channel, ts: r.ts };
   }
   async update(channel, ts, msg) {
-    const m = typeof msg === 'string' ? { text: msg } : msg;
+    const m = outgoing(msg);
     await this.client.chat.update({ channel, ts, ...m });
   }
   async ephemeral(channel, user, text) { try { await this.client.chat.postEphemeral({ channel, user, text }); } catch (e) { this.log('warn', `ephemeral failed: ${e.message}`); } }
@@ -120,4 +121,13 @@ export class SlackAdapter {
     if (this.channelNames.has(id)) return this.channelNames.get(id);
     try { const c = await this.client.conversations.info({ channel: id }); const n = c.channel?.name ?? null; this.channelNames.set(id, n); return n; } catch { return null; }
   }
+}
+
+/** Normalise an outgoing message: strings and section mrkdwn text get Markdown -> mrkdwn conversion. */
+export function outgoing(msg) {
+  if (typeof msg === 'string') return { text: toMrkdwn(msg) };
+  const m = { ...msg };
+  if (typeof m.text === 'string') m.text = toMrkdwn(m.text);
+  if (Array.isArray(m.blocks)) m.blocks = m.blocks.map((b) => (b.type === 'section' && b.text?.type === 'mrkdwn' ? { ...b, text: { ...b.text, text: toMrkdwn(b.text.text) } } : b));
+  return m;
 }
