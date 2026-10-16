@@ -1,4 +1,5 @@
 // Paseo executor: one agent per request, labelled with the chat thread; concurrency per owner.
+import fs from 'node:fs';
 import { workerPrompt, investigatePrompt, proceedPrompt, handoffPrompt } from './briefs.mjs';
 
 export class ExecutorError extends Error {}
@@ -45,6 +46,7 @@ export class PaseoExecutor {
       const ids = (m?.models ?? []).slice(0, 8).map((x) => `${base}/${x.id}`);
       throw new ExecutorError(`executor.provider must be "provider/model", e.g. ${ids[0] ?? base + '/<model>'}${ids.length ? ' (also: ' + ids.slice(1).join(', ') + ')' : ''}`);
     }
+    fs.mkdirSync(this.cwd, { recursive: true });
     return { url: this.paseo_url, provider: this.provider };
   }
 
@@ -53,6 +55,7 @@ export class PaseoExecutor {
 
   async _create(request, prompt, title) {
     await this.connect();
+    fs.mkdirSync(this.cwd, { recursive: true }); // Paseo removes a workspace directory when its last agent is archived
     const h = await this.client.agents.create({ config: { provider: this.provider }, cwd: this.cwd, title: title?.slice(0, 80), labels: this.labelsFor(request), prompt });
     this.handles.set(request.id, h);
     return h;

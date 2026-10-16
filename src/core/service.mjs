@@ -29,6 +29,13 @@ export class Service {
   async stop() { for (const t of this.timers) clearInterval(t); await this.chat.stop?.(); for (const e of this.executors.values()) await e.close?.(); }
 
   // ---------- helpers ----------
+  /** Outward actions granted on approval, per approvals.outward_actions_mode. */
+  grantedOutward(request, { none = false } = {}) {
+    if (none) return [];
+    const mode = this.config.approvals.outward_actions_mode;
+    if (mode === 'all') return Object.keys(this.config.outward_actions);
+    return request.brief?.outward_actions ?? [];
+  }
   /** Engaged = live request, or Lekam posted in the thread within chat.thread_engagement (store first, then the thread itself). */
   async isEngagedThread(channel, thread_ts) {
     const r = this.store.findByThread(channel, thread_ts);
@@ -227,7 +234,7 @@ export class Service {
             return this.forward(request, text, { user: a.user });
           }
           const mode = a.action_id === ACTIONS.APPROVE_ONCE ? 'once' : 'task';
-          const outward = a.action_id === ACTIONS.DELEGATE_NO_OUTWARD ? [] : (request.brief?.outward_actions ?? []);
+          const outward = this.grantedOutward(request, { none: a.action_id === ACTIONS.DELEGATE_NO_OUTWARD });
           const scope = { brief: request.brief, outward_actions: outward };
           this.store.updateRequest(id, { scope, approval_mode: mode });
           this.store.transition(id, 'APPROVED', { actor: a.user, data: { mode, outward } });
@@ -251,7 +258,7 @@ export class Service {
           return;
         }
         case ACTIONS.PROCEED: {
-          const outward = request.brief?.outward_actions ?? [];
+          const outward = this.grantedOutward(request);
           this.store.updateRequest(id, { scope: { brief: request.brief, outward_actions: outward }, approval_mode: 'task' });
           this.store.transition(id, 'RUNNING', { actor: a.user, data: { outward } });
           await this.updateCard(request, actionedCard(await args(), 'Proceeding'));

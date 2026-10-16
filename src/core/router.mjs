@@ -12,7 +12,7 @@
 
 export function forcesCard(text, config) {
   if (!text) return false;
-  for (const re of config.approvals.force_card_regexes ?? []) if (re.test(text)) return true;
+  if (config.approvals.outward_actions_mode !== 'all') for (const re of config.approvals.force_card_regexes ?? []) if (re.test(text)) return true;
   for (const r of config.repos ?? []) if (new RegExp(`\\b${escape(r.name)}\\b`, 'i').test(text)) return true;
   return false;
 }

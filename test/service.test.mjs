@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { harness, cls, OWNER, REQ, CHAN } from './helpers.mjs';
+import { harness, cls, testConfig, OWNER, REQ, CHAN } from './helpers.mjs';
 import { ACTIONS } from '../src/approvals/cards.mjs';
 
 const tick = () => new Promise((r) => setTimeout(r, 5));
@@ -232,4 +232,24 @@ test('brain receives display names, not ids', async () => {
   assert.equal(input.requester, 'name:' + REQ);
   assert.equal(input.channel, '#chan-' + CHAN);
   assert.ok(input.thread.every((m) => m.user.startsWith('name:') || m.user === 'Lekam'));
+});
+
+test('outward_actions_mode: all grants everything and skips keyword cards; proposed grants the brief', async () => {
+  const all = testConfig({ approvals: { outward_actions_mode: 'all' } });
+  let h = await harness({ config: all, execScript: { start: 'ok', send: 'ok' } });
+  let m = await h.chat.inject({ kind: 'bot_mention', channel: CHAN, user: REQ, text: 'look at this' });
+  let req = h.store.findByThread(CHAN, m.thread_ts);
+  assert.ok(JSON.stringify(h.chat.dms[0].blocks).includes('any outward action'));
+  await h.chat.click(ACTIONS.APPROVE_TASK, req.id, OWNER, h.chat.dms[0]); await tick();
+  assert.deepEqual(h.store.getRequest(req.id).scope.outward_actions, ['jira_comment', 'pr_create']);
+  const sends = h.exec.calls.length;
+  await h.chat.inject({ kind: 'followup', channel: CHAN, thread_ts: m.thread_ts, user: REQ, text: 'now raise the PR' }); await tick();
+  assert.equal(h.exec.calls.length, sends + 1, 'keyword did not force a card in all mode');
+  const prop = testConfig({ approvals: { outward_actions_mode: 'proposed' } });
+  h = await harness({ config: prop });
+  m = await h.chat.inject({ kind: 'bot_mention', channel: CHAN, user: REQ, text: 'look at this' });
+  assert.ok(JSON.stringify(h.chat.dms[0].blocks).includes('Will be allowed to'));
+  req = h.store.findByThread(CHAN, m.thread_ts);
+  await h.chat.click(ACTIONS.APPROVE_TASK, req.id, OWNER, h.chat.dms[0]); await tick();
+  assert.deepEqual(h.store.getRequest(req.id).scope.outward_actions, ['jira_comment', 'pr_create']);
 });
