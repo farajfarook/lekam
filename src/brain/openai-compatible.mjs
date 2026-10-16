@@ -15,7 +15,6 @@ export class OpenAICompatibleBrain {
     return {
       model,
       messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
-      temperature: 0.2,
       max_tokens: 800,
       response_format: { type: 'json_schema', json_schema: CLASSIFICATION_SCHEMA },
     };
