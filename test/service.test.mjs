@@ -191,3 +191,15 @@ test('auto-post ticked posts result straight to the thread', async () => {
   assert.equal(h.store.getRequest(req.id).state, 'RELEASED');
   assert.equal(h.chat.posts.at(-1).text, 'All sorted.');
 });
+
+test('untagged reply in a thread where Lekam spoke is treated as a mention', async () => {
+  let n = 0;
+  const h = await harness({ brainScript: () => (n++ === 0 ? cls({ intent: 'chitchat', reply_to_user: 'Hello.' , brief: null }) : cls()) });
+  const m = await h.chat.inject({ kind: 'bot_mention', channel: CHAN, user: REQ, text: 'hello' });
+  assert.equal(h.chat.posts[0].text, 'Hello.');
+  assert.equal(h.store.findByThread(CHAN, m.thread_ts), null);
+  assert.ok(h.svc.chat.isEngaged(CHAN, m.thread_ts), 'thread engaged after bot reply');
+  await h.chat.inject({ kind: 'followup', channel: CHAN, thread_ts: m.thread_ts, user: REQ, text: 'check open issues in owner portal' });
+  assert.equal(h.store.findByThread(CHAN, m.thread_ts)?.state, 'PENDING_APPROVAL');
+  assert.equal(h.chat.dms.length, 1);
+});

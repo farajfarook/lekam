@@ -27,7 +27,7 @@ function env(name, { required = true } = {}) {
 }
 
 const DEFAULTS = {
-  chat: { platform: 'slack', reactions: { pending: 'eyes', running: 'gear', done: 'white_check_mark', declined: 'no_entry_sign', failed: 'x', needs_info: 'question' } },
+  chat: { platform: 'slack', thread_engagement: '24h', reactions: { pending: 'eyes', running: 'gear', done: 'white_check_mark', declined: 'no_entry_sign', failed: 'x', needs_info: 'question' } },
   brain: { threshold: 0.7, thread_context_messages: 20, recent_outcomes: 10, catalogue_max_chars: 16000, timeout_ms: 30000 },
   approvals: { ttl_bot_mention: '24h', ttl_owner_mention: '4h', auto_post_result_default: false, force_card_patterns: ['\\bPR\\b', '\\bdeploy', '\\bmerge\\b', '\\bprod\\b', '\\bjira\\b', '\\bemail\\b', '\\bdelete\\b'] },
   limits: { per_user_per_hour: 10, pending_per_owner: 20 },
@@ -65,6 +65,8 @@ export function resolveConfig(raw, { baseDir = process.cwd(), envLookup = env } 
     return { name: r.name, url: r.url ?? null, default_branch: r.default_branch ?? 'main', notes: r.notes ?? '' };
   });
   c.skills_dirs = (raw.skills_dirs ?? []).map((d) => path.resolve(baseDir, expandHome(d)));
+
+  c.chat.thread_engagement_ms = parseDuration(c.chat.thread_engagement, 'chat.thread_engagement');
 
   // Secrets
   if (c.chat.platform !== 'slack' && c.chat.platform !== 'fake') throw new ConfigError(`chat.platform: unsupported "${c.chat.platform}"`);

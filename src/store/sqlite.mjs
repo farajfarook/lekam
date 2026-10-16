@@ -25,6 +25,7 @@ const MIGRATIONS = [
    CREATE INDEX IF NOT EXISTS audit_req ON audit(request_id);
    CREATE TABLE IF NOT EXISTS rate (requester TEXT NOT NULL, at INTEGER NOT NULL);
    CREATE INDEX IF NOT EXISTS rate_req ON rate(requester, at);`,
+  `CREATE TABLE IF NOT EXISTS threads (channel TEXT NOT NULL, thread_ts TEXT NOT NULL, last_bot_post_at INTEGER NOT NULL, PRIMARY KEY(channel, thread_ts));`,
 ];
 
 const J = (v) => (v === null || v === undefined ? null : JSON.stringify(v));
@@ -134,6 +135,15 @@ export class Store {
     this.db.prepare(`UPDATE sessions SET status=?, finished_at=? WHERE request_id=?`).run(status, Date.now(), request_id);
   }
   getSession(request_id) { return this.db.prepare(`SELECT * FROM sessions WHERE request_id=?`).get(request_id) ?? null; }
+
+  // ---- thread engagement (bot has spoken here recently) ----
+  touchThread(channel, thread_ts, now = Date.now()) {
+    this.db.prepare(`INSERT OR REPLACE INTO threads(channel,thread_ts,last_bot_post_at) VALUES(?,?,?)`).run(channel, thread_ts, now);
+  }
+  botSpokeRecently(channel, thread_ts, { withinMs = 24 * 36e5, now = Date.now() } = {}) {
+    const r = this.db.prepare(`SELECT last_bot_post_at FROM threads WHERE channel=? AND thread_ts=?`).get(channel, thread_ts);
+    return !!r && now - r.last_bot_post_at < withinMs;
+  }
 
   // ---- dedupe ----
   seen(event_id, { ttlMs = 24 * 36e5, now = Date.now() } = {}) {

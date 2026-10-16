@@ -15,7 +15,10 @@ export class Service {
   }
 
   async start() {
-    this.chat.setEngagedLookup((channel, thread_ts) => { const r = this.store.findByThread(channel, thread_ts); return !!r && isEngaged(r.state); });
+    this.chat.setEngagedLookup((channel, thread_ts) => {
+      const r = this.store.findByThread(channel, thread_ts);
+      return (!!r && isEngaged(r.state)) || this.store.botSpokeRecently(channel, thread_ts, { withinMs: this.config.chat.thread_engagement_ms });
+    });
     this.chat.onMessage((m) => this.onMessage(m));
     this.chat.onAction((a) => this.onAction(a));
     this.chat.onView((v) => this.onView(v));
@@ -46,6 +49,8 @@ export class Service {
   async cardArgs(request) {
     return { request, config: this.config, requesterName: await this.chat.userName(request.requester), permalink: await this.chat.permalink(request.channel, request.origin_ts), channelName: await this.chat.channelName(request.channel), lowConfidence: (request.classification?.confidence ?? 1) < this.config.brain.threshold };
   }
+  /** Post in a channel thread and remember that Lekam spoke there (keeps the thread engaged). */
+  async post(channel, thread_ts, msg) { const r = await this.chat.post(channel, thread_ts, msg); this.store.touchThread(channel, thread_ts); return r; }
   async updateCard(request, msg) { if (request.card) await this.chat.update(request.card.channel, request.card.ts, msg); }
   async classify(msg, { request = null, ownerId } = {}) {
     try {
@@ -75,7 +80,11 @@ export class Service {
     }
     const existing = this.store.findByThread(msg.channel, msg.thread_ts);
     if (existing && isEngaged(existing.state) && (msg.kind === 'followup' || existing.state !== 'DONE')) return this.onFollowup(msg, existing);
-    if (msg.kind === 'followup') return; // engaged lookup raced a terminal state
+    if (msg.kind === 'followup') {
+      // No live request but Lekam spoke in this thread recently: treat the reply as addressed to it.
+      if (!this.store.botSpokeRecently(msg.channel, msg.thread_ts, { withinMs: this.config.chat.thread_engagement_ms })) return;
+      msg = { ...msg, kind: 'bot_mention' };
+    }
     return this.onNew(msg);
   }
 
@@ -85,16 +94,16 @@ export class Service {
     if (msg.kind === 'bot_mention' && this.config.ownerIds.has(msg.user) && !msg.is_dm) { /* owners asking the bot directly are allowed: fall through */ }
     if (rateLimited(this.store, msg.user, this.config)) {
       this.store.audit('rate_limited', null, msg.user, { channel: msg.channel });
-      if (msg.kind === 'bot_mention') await this.chat.post(msg.channel, msg.thread_ts, `You've sent a lot my way this hour. Give it a little while and try again.`);
+      if (msg.kind === 'bot_mention') await this.post(msg.channel, msg.thread_ts, `You've sent a lot my way this hour. Give it a little while and try again.`);
       return;
     }
     const cls = await this.classify(msg, { ownerId: owner.slack_id });
     const d = decideNew(msg, cls, this.config);
     this.store.audit('decision', null, msg.user, { kind: msg.kind, decision: d.type, reason: d.reason ?? null, intent: cls?.intent ?? null, confidence: cls?.confidence ?? null });
     switch (d.type) {
-      case 'reply': return this.chat.post(msg.channel, msg.thread_ts, d.text);
+      case 'reply': return this.post(msg.channel, msg.thread_ts, d.text);
       case 'clarify': {
-        await this.chat.post(msg.channel, msg.thread_ts, d.question);
+        await this.post(msg.channel, msg.thread_ts, d.question);
         await this.chat.react(msg.channel, msg.ts, this.config.chat.reactions.needs_info);
         return;
       }
@@ -106,7 +115,7 @@ export class Service {
   async openCard(msg, owner, cls, d) {
     if (ownerOverloaded(this.store, owner.slack_id, this.config)) {
       this.store.audit('owner_overloaded', null, msg.user, { owner: owner.slack_id });
-      if (msg.kind === 'bot_mention') await this.chat.post(msg.channel, msg.thread_ts, `${owner.name} has a queue of requests already. I'll be able to take this a bit later.`);
+      if (msg.kind === 'bot_mention') await this.post(msg.channel, msg.thread_ts, `${owner.name} has a queue of requests already. I'll be able to take this a bit later.`);
       return;
     }
     const brief = cls.brief ?? { summary: msg.text.slice(0, 300), skill: null, repo: null, outward_actions: [], notes: '' };
@@ -116,7 +125,7 @@ export class Service {
     request = this.store.updateRequest(request.id, { card });
     if (msg.kind === 'bot_mention') {
       await this.react(request, 'pending');
-      if (cls.reply_to_user) await this.chat.post(msg.channel, msg.thread_ts, cls.reply_to_user);
+      if (cls.reply_to_user) await this.post(msg.channel, msg.thread_ts, cls.reply_to_user);
     }
   }
 
@@ -128,7 +137,7 @@ export class Service {
     this.store.audit('decision', request.id, msg.user, { kind: 'followup', decision: d.type, reason: d.reason ?? null, followup: cls?.followup ?? null });
     switch (d.type) {
       case 'ignore': return;
-      case 'reply': return this.chat.post(msg.channel, msg.thread_ts, d.text);
+      case 'reply': return this.post(msg.channel, msg.thread_ts, d.text);
       case 'forward': return this.forward(request, d.text, msg);
       case 'forward_or_card': {
         const owner = ownerById(this.config, request.owner);
@@ -206,7 +215,7 @@ export class Service {
           this.store.updateRequest(id, { scope, approval_mode: mode });
           this.store.transition(id, 'APPROVED', { actor: a.user, data: { mode, outward } });
           await this.updateCard(request, actionedCard(await args(), mode === 'once' ? 'Approved once' : request.kind === 'owner_mention' ? 'Delegated' : 'Approved task'));
-          if (request.kind === 'owner_mention') await this.chat.post(request.channel, request.thread_ts, `${this.ownerName(request.owner)} asked me to pick this up. I'll post back here when there's something to see.`);
+          if (request.kind === 'owner_mention') await this.post(request.channel, request.thread_ts, `${this.ownerName(request.owner)} asked me to pick this up. I'll post back here when there's something to see.`);
           return this.run(this.store.getRequest(id));
         }
         case ACTIONS.DISCUSS: {
@@ -220,7 +229,7 @@ export class Service {
           await this.updateCard(request, actionedCard(await args(), a.action_id === ACTIONS.IGNORE ? 'Ignored' : 'Declined'));
           if (request.kind === 'bot_mention') {
             await this.react(request, 'declined');
-            await this.chat.post(request.channel, request.thread_ts, `${this.ownerName(request.owner)} passed on this one. Ping them directly if it's urgent.`);
+            await this.post(request.channel, request.thread_ts, `${this.ownerName(request.owner)} passed on this one. Ping them directly if it's urgent.`);
           }
           return;
         }
@@ -229,7 +238,7 @@ export class Service {
           this.store.updateRequest(id, { scope: { brief: request.brief, outward_actions: outward }, approval_mode: 'task' });
           this.store.transition(id, 'RUNNING', { actor: a.user, data: { outward } });
           await this.updateCard(request, actionedCard(await args(), 'Proceeding'));
-          if (request.kind === 'owner_mention') await this.chat.post(request.channel, request.thread_ts, `${this.ownerName(request.owner)} asked me to pick this up. I'll post back here when there's something to see.`);
+          if (request.kind === 'owner_mention') await this.post(request.channel, request.thread_ts, `${this.ownerName(request.owner)} asked me to pick this up. I'll post back here when there's something to see.`);
           await this.react(request, 'running');
           const exec = this.exec(request.owner);
           const { result } = await exec.proceed({ request: this.store.getRequest(id), brief: request.brief, allowed: outward, onQueued: (n) => this.updateCard(request, actionedCard(args, `Queued (${n} ahead)`)).catch(() => {}) });
@@ -243,7 +252,7 @@ export class Service {
         }
         case ACTIONS.POST_RESULT: {
           this.store.transition(id, 'RELEASED', { actor: a.user });
-          await this.chat.post(request.channel, request.thread_ts, request.outcome?.text || '(no report)');
+          await this.post(request.channel, request.thread_ts, request.outcome?.text || '(no report)');
           await this.react(request, 'done');
           await this.chat.update(a.channel, a.message_ts, { text: `Posted ${fmtTime()}`, blocks: [{ type: 'section', text: { type: 'mrkdwn', text: `*Posted to thread* ${fmtTime()} · req \`${id}\`` } }] });
           return;
@@ -314,7 +323,7 @@ export class Service {
     if (r.state === 'RUNNING') this.store.transition(r.id, 'DONE');
     const link = this.exec(r.owner).agentLink(r.session_id);
     if (r.auto_post) {
-      await this.chat.post(r.channel, r.thread_ts, outcome.text || '(no report)');
+      await this.post(r.channel, r.thread_ts, outcome.text || '(no report)');
       if (this.store.getRequest(r.id).state === 'DONE') this.store.transition(r.id, 'RELEASED');
       await this.react(r, 'done');
     } else {
@@ -329,7 +338,7 @@ export class Service {
     await this.react(request, 'failed');
     const link = this.exec(request.owner).agentLink(request.session_id);
     await this.updateCard(request, actionedCard(await this.cardArgs(request), `Failed: ${String(reason).slice(0, 200)}`, link ? [{ type: 'context', elements: [{ type: 'mrkdwn', text: `<${link}|open in Paseo>` }] }] : []));
-    if (request.kind === 'bot_mention') await this.chat.post(request.channel, request.thread_ts, `That didn't go through (${String(reason).slice(0, 120)}). ${this.ownerName(request.owner)} has the details.`);
+    if (request.kind === 'bot_mention') await this.post(request.channel, request.thread_ts, `That didn't go through (${String(reason).slice(0, 120)}). ${this.ownerName(request.owner)} has the details.`);
   }
 
   // ---------- timers ----------

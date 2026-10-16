@@ -9,6 +9,7 @@ chat:
   platform: slack
   bot_token_env: LEKAM_SLACK_BOT_TOKEN   # xoxb-...
   app_token_env: LEKAM_SLACK_APP_TOKEN   # xapp-... (Socket Mode)
+  thread_engagement: 24h                 # after Lekam posts in a thread, untagged replies there are treated as addressed to it
   reactions:                             # status shown on the originating message
     pending: eyes
     running: gear
