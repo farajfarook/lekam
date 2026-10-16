@@ -91,7 +91,7 @@ The adapter SHALL route Block Kit `block_actions` payloads to core as `{ action_
 - **THEN** the adapter acknowledges within 3 seconds and core receives `{ action_id, value, user, channel, message_ts }`
 
 ### Requirement: Required Slack scopes
-The shipped manifest SHALL request exactly: `app_mentions:read`, `channels:history`, `groups:history`, `im:history`, `im:write`, `chat:write`, `reactions:write`, `reactions:read`, `users:read`, with Socket Mode enabled and events `app_mention`, `message.channels`, `message.groups`, `message.im`, `member_joined_channel`, `member_left_channel`.
+The shipped manifest SHALL request exactly: `app_mentions:read`, `channels:history`, `channels:read`, `groups:history`, `groups:read`, `im:history`, `im:write`, `chat:write`, `reactions:write`, `reactions:read`, `users:read`, with Socket Mode enabled and events `app_mention`, `message.channels`, `message.groups`, `message.im`, `member_joined_channel`, `member_left_channel`.
 
 #### Scenario: required slack scopes
 - **WHEN** an operator installs the shipped manifest
