@@ -213,3 +213,13 @@ test('a thread Lekam posted in before a restart is recognised from the thread it
   await h.chat.inject({ kind: 'followup', channel: CHAN, thread_ts: ts, user: REQ, text: 'check open issues' });
   assert.equal(h.store.findByThread(CHAN, ts)?.state, 'PENDING_APPROVAL');
 });
+
+test('card shows thread context when the trigger refers back', async () => {
+  const h = await harness();
+  h.chat.botUserId = 'UBOT';
+  const first = await h.chat.inject({ kind: 'bot_mention', channel: CHAN, user: REQ, text: 'hello' });
+  h.chat.thread(CHAN, first.thread_ts).push({ user: REQ, text: 'check open issues in owner portal', ts: '9' });
+  await h.chat.inject({ kind: 'followup', channel: CHAN, thread_ts: first.thread_ts, user: REQ, text: 'check again please' });
+  const s = JSON.stringify(h.chat.lastDm().blocks);
+  assert.ok(s.includes('Thread so far') && s.includes('check open issues in owner portal') && s.includes('> check again please'));
+});

@@ -7,7 +7,9 @@ Return ONLY a JSON object matching the schema you were given. Field guidance:
 - confidence: how sure you are that this is a real request for the owner's agents (0-1).
 - urgent: outages, production incidents, "everyone", "down", "since X minutes".
 - reply_to_user: what the bot says in the thread, in persona, or null to say nothing. For kind=owner_mention this is ignored (the bot stays silent) - set null.
-- brief: for task_request only. summary = one or two sentences an agent could act on; skill = exact skill name from the catalogue or null; repo = exact repo name from the catalogue or null; outward_actions = ids from the catalogue the task would need (only those); notes = assumptions and context worth passing on.
+- brief: for task_request only. summary = one or two sentences an agent could act on, written as work to do and findings to report back (never "post", "reply" or "message" anyone: the agent reports to Lekam, which delivers it); skill = exact skill name from the catalogue or null; repo = exact repo name from the catalogue or null; outward_actions = ids from the catalogue the task would need (only those); notes = assumptions you made and gaps the owner should know about, at most two sentences, no user or channel ids, nothing already in the summary.
+- Resolve typos and shorthand against the catalogue (e.g. "ownwr pryal" -> owner-portal) and say so in notes.
+- reply_to_user is at most two short sentences. Do not explain what you cannot do unless asked.
 - followup: only for kind=followup. in_scope = continues the approved scope; scope_change = needs new repo, new outward action, deployment, or anything beyond the approved brief; not_for_agent = thanks/chit-chat/question you can answer yourself.
 - clarifying_question: for needs_clarification, one short question. Otherwise null.
 Never include text outside the JSON. Never invent skills, repos or action ids that are not in the catalogue.`;

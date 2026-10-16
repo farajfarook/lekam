@@ -25,15 +25,14 @@ const btn = (text, action_id, value, style) => ({ type: 'button', text: { type: 
 const quote = (s) => s.split('\n').map((l) => '> ' + l).join('\n');
 const trunc = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
 
-function headerBlocks({ request, requesterName, permalink, channelName, lowConfidence }) {
+function headerBlocks({ request, requesterName, permalink, channelName, lowConfidence, excerpt = [] }) {
   const kind = request.kind === 'owner_mention' ? 'tagged you' : 'asked Lekam';
   const cls = request.classification ?? {};
   const flags = [cls.urgent ? ':rotating_light: *urgent*' : null, lowConfidence ? ':grey_question: low confidence' : null, `confidence ${Math.round((cls.confidence ?? 0) * 100)}%`].filter(Boolean);
-  return [
-    md(`*${requesterName ?? request.requester} ${kind} in ${channelName ? '#' + channelName : request.channel}*${permalink ? ` · <${permalink}|open thread>` : ''}`),
-    md(quote(trunc(request.request_text, 2500))),
-    ctx(...flags, `req \`${request.id}\``),
-  ];
+  const blocks = [md(`*${requesterName ?? request.requester} ${kind} in ${channelName ? '#' + channelName : request.channel}*${permalink ? ` · <${permalink}|open thread>` : ''}`)];
+  if (excerpt.length) blocks.push(ctx('*Thread so far:*\n' + excerpt.map((m) => `${m.name}: ${trunc(m.text.replace(/\n+/g, ' '), 160)}`).join('\n')));
+  blocks.push(md(quote(trunc(request.request_text, 2500))), ctx(...flags, `req \`${request.id}\``));
+  return blocks;
 }
 
 function briefBlocks({ request, config, selected }) {

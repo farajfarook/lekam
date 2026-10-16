@@ -56,14 +56,16 @@ export class Service {
     return next;
   }
   async cardArgs(request) {
-    return { request, config: this.config, requesterName: await this.chat.userName(request.requester), permalink: await this.chat.permalink(request.channel, request.origin_ts), channelName: await this.chat.channelName(request.channel), lowConfidence: (request.classification?.confidence ?? 1) < this.config.brain.threshold };
+    const excerpt = [];
+    for (const m of request.classification?.thread_excerpt ?? []) excerpt.push({ name: await this.chat.userName(m.user), text: m.text });
+    return { request, config: this.config, excerpt, requesterName: await this.chat.userName(request.requester), permalink: await this.chat.permalink(request.channel, request.origin_ts), channelName: await this.chat.channelName(request.channel), lowConfidence: (request.classification?.confidence ?? 1) < this.config.brain.threshold };
   }
   /** Post in a channel thread and remember that Lekam spoke there (keeps the thread engaged). */
   async post(channel, thread_ts, msg) { const r = await this.chat.post(channel, thread_ts, msg); this.store.touchThread(channel, thread_ts); return r; }
   async updateCard(request, msg) { if (request.card) await this.chat.update(request.card.channel, request.card.ts, msg); }
-  async classify(msg, { request = null, ownerId } = {}) {
+  async classify(msg, { request = null, ownerId, thread = null } = {}) {
     try {
-      const thread = await this.chat.fetchThread(msg.channel, msg.thread_ts, this.config.brain.thread_context_messages);
+      thread ??= await this.chat.fetchThread(msg.channel, msg.thread_ts, this.config.brain.thread_context_messages);
       const cls = await this.brain.classify(
         { kind: msg.kind, requester: msg.user, channel: msg.channel, text: msg.text, thread, approvedScope: request?.scope ?? null },
         { persona: this.config.persona, catalogue: this.catalogue.text, outcomes: this.store.recentOutcomes(this.config.brain.recent_outcomes), ownerName: this.ownerName(ownerId), request_id: request?.id ?? null },
@@ -106,7 +108,9 @@ export class Service {
       if (msg.kind === 'bot_mention') await this.post(msg.channel, msg.thread_ts, `You've sent a lot my way this hour. Give it a little while and try again.`);
       return;
     }
-    const cls = await this.classify(msg, { ownerId: owner.slack_id });
+    const thread = await this.chat.fetchThread(msg.channel, msg.thread_ts, this.config.brain.thread_context_messages);
+    const cls = await this.classify(msg, { ownerId: owner.slack_id, thread });
+    if (cls) cls.thread_excerpt = thread.filter((m) => m.ts !== msg.ts && m.user !== this.chat.botUserId).slice(-4);
     const d = decideNew(msg, cls, this.config);
     this.store.audit('decision', null, msg.user, { kind: msg.kind, decision: d.type, reason: d.reason ?? null, intent: cls?.intent ?? null, confidence: cls?.confidence ?? null });
     switch (d.type) {
