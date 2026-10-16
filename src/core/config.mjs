@@ -28,7 +28,7 @@ function env(name, { required = true } = {}) {
 
 const DEFAULTS = {
   chat: { platform: 'slack', thread_engagement: '24h', reactions: { pending: 'eyes', running: 'gear', done: 'white_check_mark', declined: 'no_entry_sign', failed: 'x', needs_info: 'question' } },
-  brain: { threshold: 0.7, thread_context_messages: 20, recent_outcomes: 10, catalogue_max_chars: 16000, timeout_ms: 30000 },
+  brain: { threshold: 0.7, thread_context_messages: 20, recent_outcomes: 10, catalogue_max_chars: 16000, timeout_ms: 30000, max_tokens: 2500 },
   approvals: { ttl_bot_mention: '24h', ttl_owner_mention: '4h', auto_post_result_default: false, force_card_patterns: ['\\bPR\\b', '\\bdeploy', '\\bmerge\\b', '\\bprod\\b', '\\bjira\\b', '\\bemail\\b', '\\bdelete\\b'] },
   limits: { per_user_per_hour: 10, pending_per_owner: 20 },
   store: { path: './lekam.db' },

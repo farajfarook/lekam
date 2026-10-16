@@ -6,8 +6,8 @@ export class BrainError extends Error {}
 
 export class OpenAICompatibleBrain {
   /** @param {object} o config.brain + { fetch?, audit?, log? } */
-  constructor({ base_url, api_key, classify_model, brief_model, timeout_ms = 30000, fetch: f = globalThis.fetch, audit = () => {}, log = () => {} }) {
-    Object.assign(this, { base_url, api_key, classify_model, brief_model: brief_model ?? classify_model, timeout_ms, fetch: f, audit, log });
+  constructor({ base_url, api_key, classify_model, brief_model, timeout_ms = 30000, max_tokens = 2500, fetch: f = globalThis.fetch, audit = () => {}, log = () => {} }) {
+    Object.assign(this, { base_url, api_key, classify_model, brief_model: brief_model ?? classify_model, timeout_ms, max_tokens, fetch: f, audit, log });
   }
 
   buildBody(model, system, user) {
@@ -15,7 +15,7 @@ export class OpenAICompatibleBrain {
     return {
       model,
       messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
-      max_tokens: 800,
+      max_tokens: this.max_tokens, // reasoning models spend tokens before the JSON; keep headroom
       response_format: { type: 'json_schema', json_schema: CLASSIFICATION_SCHEMA },
     };
   }
@@ -39,6 +39,7 @@ export class OpenAICompatibleBrain {
     this.audit('brain_call', request_id, null, { model, prompt_tokens: u.prompt_tokens ?? null, completion_tokens: u.completion_tokens ?? null, cost: json.usage?.cost ?? res.headers?.get?.('x-litellm-response-cost') ?? null });
     const content = json.choices?.[0]?.message?.content;
     if (typeof content !== 'string') throw new SchemaError('no content in response');
+    if (json.choices?.[0]?.finish_reason === 'length') throw new SchemaError(`output truncated at max_tokens=${this.max_tokens} (reasoning_tokens=${u.completion_tokens_details?.reasoning_tokens ?? '?'})`);
     return validate(JSON.parse(stripFences(content)));
   }
 
