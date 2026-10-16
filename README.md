@@ -60,7 +60,7 @@ cp config/persona.md config/guardrails.md .     # edit to taste
    ```
 6. Invite the bot to a channel: `/invite @Lekam`. It only hears channels it's in.
 
-As a service: `config/lekam.service` (systemd user unit).
+As a service: `config/lekam.service` (systemd user unit). Without a login session, run `systemctl --user` with `XDG_RUNTIME_DIR=/run/user/$(id -u)` and `DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus` set, and `loginctl enable-linger $USER` so it starts at boot.
 
 ## Configuration
 

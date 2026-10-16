@@ -12,6 +12,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=%h/lekam
+# Use an absolute node path if node is not on the service PATH (e.g. nvm / pi-node installs):
+#   ExecStart=/bin/bash -lc '. $HOME/.agents/env.local.sh && exec /abs/path/to/node %h/lekam/src/cli.mjs run --config %h/lekam/lekam.yml'
 ExecStart=/usr/bin/env node %h/lekam/src/cli.mjs run --config %h/lekam/lekam.yml
 Restart=always
 RestartSec=5
