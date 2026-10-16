@@ -224,3 +224,12 @@ test('card shows thread context when the trigger refers back', async () => {
   const s = JSON.stringify(h.chat.lastDm().blocks);
   assert.ok(s.includes('Thread so far') && s.includes('check open issues in owner portal') && s.includes('> check again please'));
 });
+
+test('brain receives display names, not ids', async () => {
+  const h = await harness();
+  await h.chat.inject({ kind: 'bot_mention', channel: CHAN, user: REQ, text: 'fix the export' });
+  const input = h.brain.calls[0].input;
+  assert.equal(input.requester, 'name:' + REQ);
+  assert.equal(input.channel, '#chan-' + CHAN);
+  assert.ok(input.thread.every((m) => m.user.startsWith('name:') || m.user === 'Lekam'));
+});

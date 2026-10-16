@@ -24,7 +24,7 @@ export function systemPrompt({ persona, catalogue, outcomes = [], ownerName = 't
 /** Build the user turn as JSON. `thread` is an array of {user, text, ts} newest last. */
 export function userTurn({ kind, requester, channel, text, thread = [], approvedScope = null, ownerName }) {
   return JSON.stringify({
-    kind, requester, channel,
+    kind, requester, channel, // display names, never ids
     owner: ownerName,
     approved_scope: approvedScope,
     thread_excerpt: thread.map((m) => ({ user: m.user, text: m.text })),

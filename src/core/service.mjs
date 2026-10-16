@@ -66,8 +66,12 @@ export class Service {
   async classify(msg, { request = null, ownerId, thread = null } = {}) {
     try {
       thread ??= await this.chat.fetchThread(msg.channel, msg.thread_ts, this.config.brain.thread_context_messages);
+      // The brain sees names, never ids.
+      const named = [];
+      for (const m of thread) named.push({ user: m.user === this.chat.botUserId ? 'Lekam' : await this.chat.userName(m.user), text: m.text, ts: m.ts });
+      const channelName = await this.chat.channelName(msg.channel);
       const cls = await this.brain.classify(
-        { kind: msg.kind, requester: msg.user, channel: msg.channel, text: msg.text, thread, approvedScope: request?.scope ?? null },
+        { kind: msg.kind, requester: await this.chat.userName(msg.user), channel: channelName ? '#' + channelName : 'a direct message', text: msg.text, thread: named, approvedScope: request?.scope ?? null },
         { persona: this.config.persona, catalogue: this.catalogue.text, outcomes: this.store.recentOutcomes(this.config.brain.recent_outcomes), ownerName: this.ownerName(ownerId), request_id: request?.id ?? null },
       );
       if (cls.brief) {
