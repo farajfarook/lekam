@@ -112,7 +112,8 @@ test('follow-ups: in-scope forwards, scope change cards, owner bypasses, approve
   const sends = h.exec.calls.length;
   await h.chat.inject({ kind: 'followup', channel: CHAN, thread_ts: m.thread_ts, user: REQ, text: 'and do it in core-pms too' });
   assert.equal(h.exec.calls.length, sends);
-  assert.ok(JSON.stringify(h.chat.lastDm().blocks).includes('Follow-up on req'));
+  assert.ok(JSON.stringify(h.chat.lastDm().blocks).includes('*Follow-up* from'));
+  assert.equal(h.chat.lastDm().thread_ts, h.chat.dms[0].ts, 'follow-up card sits in the card thread');
   // forced pattern -> card even when brain says in_scope
   fu = 'in_scope';
   await h.chat.inject({ kind: 'followup', channel: CHAN, thread_ts: m.thread_ts, user: REQ, text: 'now raise the PR' });
@@ -135,7 +136,7 @@ test('discuss first: investigate, pipe owner DM, proceed on same session', async
   assert.equal(h.exec.calls[0][0], 'investigate');
   assert.deepEqual(h.exec.calls[0][1].brief.summary, 'Fix the blank PDF export');
   const plan = h.chat.dms.find((d) => d.thread_ts === card.ts);
-  assert.equal(plan.text, 'Plan: fix renderer');
+  assert.equal(plan.text, '<@UOWNER> Plan: fix renderer');
   // owner talks in the card thread
   await h.chat.inject({ kind: 'bot_mention', is_dm: true, channel: card.channel, thread_ts: card.ts, user: OWNER, text: 'what about the CSV path?' });
   assert.equal(h.exec.calls.at(-1)[0], 'send');
@@ -296,4 +297,43 @@ test('brain down: the message still reaches the owner as a card with the raw tex
   assert.ok(s.includes('not pre-read') && s.includes('ai and portal team for last 1 month'));
   assert.match(h.chat.posts.at(-1).text, /passed this to Faraj/);
   assert.ok(!h.chat.posts.some((p) => /make sense/.test(p.text)));
+});
+
+test('session thread: result card, failures and owner replies all live under the approval card', async () => {
+  const h = await harness({ execScript: { start: 'First report.', send: 'Second report.' } });
+  const m = await h.chat.inject({ kind: 'bot_mention', channel: CHAN, user: REQ, text: 'fix the export' });
+  const req = h.store.findByThread(CHAN, m.thread_ts);
+  const card = h.chat.dms[0];
+  assert.equal(card.thread_ts, null, 'card is the top-level message');
+  await h.chat.click(ACTIONS.APPROVE_TASK, req.id, OWNER, card); await tick();
+  const result = h.chat.lastDm();
+  assert.equal(result.thread_ts, card.ts);
+  assert.ok(JSON.stringify(result.blocks).includes('<@UOWNER> Result for'), 'owner is nudged in a bot-started thread');
+  await h.chat.click(ACTIONS.POST_RESULT, req.id, OWNER, result);
+  assert.equal(h.store.getRequest(req.id).state, 'RELEASED');
+  // owner keeps talking to the agent in the card thread after posting
+  await h.chat.inject({ kind: 'bot_mention', is_dm: true, channel: card.channel, thread_ts: card.ts, user: OWNER, text: 'also do the CSV' }); await tick();
+  assert.equal(h.exec.calls.at(-1)[1].text, 'also do the CSV');
+  assert.equal(h.chat.lastDm().thread_ts, card.ts);
+  assert.ok(JSON.stringify(h.chat.lastDm().blocks).includes('Second report.'));
+  await h.chat.click(ACTIONS.POST_RESULT, req.id, OWNER, h.chat.lastDm());
+  assert.equal(h.chat.posts.at(-1).text, 'Second report.');
+  assert.equal(h.chat.dms.filter((d) => !d.thread_ts).length, 1, 'only the card is top-level');
+});
+
+test('owner DMs Lekam: card, result and replies thread under the owner\'s own message; no Post step', async () => {
+  const h = await harness({ execScript: { start: 'Here you go.', send: 'More.' } });
+  const DM = `DM_${OWNER}`;
+  const m = await h.chat.inject({ kind: 'bot_mention', is_dm: true, channel: DM, user: OWNER, text: 'what did the team ship' });
+  const req = h.store.findByThread(DM, m.ts);
+  const card = h.chat.dms[0];
+  assert.equal(card.thread_ts, m.ts, 'card replies under the owner message');
+  assert.equal(h.chat.posts.length, 0, 'no "I\'ve asked Faraj" to Faraj');
+  await h.chat.click(ACTIONS.APPROVE_TASK, req.id, OWNER, card); await tick();
+  assert.deepEqual([h.chat.lastDm().text, h.chat.lastDm().thread_ts], ['Here you go.', m.ts]);
+  assert.equal(h.store.getRequest(req.id).state, 'RELEASED');
+  await h.chat.inject({ kind: 'bot_mention', is_dm: true, channel: DM, thread_ts: m.ts, user: OWNER, text: 'and last week?' }); await tick();
+  assert.equal(h.exec.calls.at(-1)[1].text, 'and last week?');
+  assert.deepEqual([h.chat.lastDm().text, h.chat.lastDm().thread_ts], ['More.', m.ts]);
+  assert.equal(h.store.listByState('PENDING_APPROVAL').length, 0, 'thread reply did not open a new request');
 });

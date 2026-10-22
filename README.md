@@ -31,6 +31,8 @@ Slack ──Socket Mode──▶ lekam ──▶ brain (LLM, JSON only, no tools
 | replies in a thread Lekam is working on | forwards in-scope follow-ups to the same agent session; cards scope changes |
 | asks something that needs no agent | answers briefly in persona, or stays quiet |
 
+**One thread per request.** In your DMs, everything about a request lives in one thread: under the approval card, or under your own message when you DM Lekam yourself. That includes follow-up cards, the Discuss-first chat, results, failures and your replies to the agent. Reply in that thread to keep talking to the same agent, even after the result was posted. When you DM Lekam yourself, the report is simply the reply in your thread; there is no Post step, because nobody else is in that conversation.
+
 **Discuss first** starts the agent in investigate-only mode (read, reproduce, propose; change nothing). You chat with it in the card's DM thread or in the Paseo app, then press **Proceed** (same session, keeps its context) or **Drop**.
 
 Status lives in one reaction on the original message: 👀 pending → ⚙️ running → ✅ done · 🚫 declined · ❌ failed · ❓ needs info. The ✅ lands when the result is posted to the thread.

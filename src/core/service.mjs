@@ -75,6 +75,16 @@ export class Service {
     for (const m of request.classification?.thread_excerpt ?? []) excerpt.push({ name: await this.chat.userName(m.user), text: m.text });
     return { request, config: this.config, excerpt, requesterName: await this.chat.userName(request.requester), permalink: await this.chat.permalink(request.channel, request.origin_ts), channelName: await this.chat.channelName(request.channel), lowConfidence: (request.classification?.confidence ?? 1) < this.config.brain.threshold };
   }
+  // ---------- the owner's session thread ----------
+  // Everything about one request (card, follow-up cards, investigation chat, results, failures) lives in one DM thread:
+  // under the approval card, or under the owner's own message when the owner DM'd Lekam.
+  sessionThread(r) { return r.card ? (r.card.thread ?? r.card.ts) : undefined; }
+  /** The owner DM'd Lekam themselves: the request thread IS the session thread and nobody else can see it. */
+  ownerOwnDm(r) { return r.card?.thread != null && r.card.thread === r.thread_ts && r.channel === r.card.channel; }
+  /** Bot-started threads are not followed by the owner: @-mention them on anything that needs their attention. */
+  nudge(r) { return this.ownerOwnDm(r) ? '' : `<@${r.owner}> `; }
+  toOwner(r, msg) { return this.chat.dm(r.owner, msg, this.sessionThread(r)); }
+
   /** Post in a channel thread and remember that Lekam spoke there (keeps the thread engaged). */
   async post(channel, thread_ts, msg, opts = {}) { const r = await this.chat.post(channel, thread_ts, msg, opts); this.store.touchThread(channel, thread_ts); return r; }
   async updateCard(request, msg) { if (request.card) await this.chat.update(request.card.channel, request.card.ts, msg); }
@@ -103,10 +113,10 @@ export class Service {
   // ---------- inbound messages ----------
   async onMessage(msg) {
     if (this.store.seen(msg.event_id)) { this.store.audit('duplicate_event', null, msg.user, { event_id: msg.event_id }); return; }
-    // Owner talking in a card's DM thread while investigating → pipe to the session.
+    // Owner replying in a session thread (DM): talk to that request's agent.
     if (msg.is_dm && this.config.ownerIds.has(msg.user) && msg.thread_ts !== msg.ts) {
       const r = this.store.findByCard(msg.channel, msg.thread_ts);
-      if (r && r.state === 'INVESTIGATING') return this.pipeToSession(r, msg);
+      if (r) return this.onSessionReply(r, msg);
     }
     const existing = this.store.findByThread(msg.channel, msg.thread_ts);
     if (existing && isEngaged(existing.state) && (msg.kind === 'followup' || existing.state !== 'DONE')) return this.onFollowup(msg, existing);
@@ -163,11 +173,14 @@ export class Service {
     const brief = cls.brief ?? { summary: msg.text.slice(0, 300), skill: null, repo: null, outward_actions: [], notes: '' };
     let request = this.store.createRequest({ kind: msg.kind, channel: msg.channel, thread_ts: msg.thread_ts, origin_ts: msg.ts, requester: msg.user, owner: owner.slack_id, request_text: msg.text, classification: cls, brief, expires_at: Date.now() + ttlFor(msg.kind, this.config) });
     request = this.store.transition(request.id, 'PENDING_APPROVAL');
-    const card = await this.chat.dm(owner.slack_id, approvalCard(await this.cardArgs(request)));
+    // Owner DM'd Lekam: the card replies under their message, so the whole session stays in that thread.
+    const ownDm = msg.is_dm && msg.user === owner.slack_id;
+    const posted = await this.chat.dm(owner.slack_id, approvalCard(await this.cardArgs(request)), ownDm ? msg.thread_ts : undefined);
+    const card = { channel: posted.channel, ts: posted.ts, thread: ownDm ? msg.thread_ts : posted.ts };
     request = this.store.updateRequest(request.id, { card });
     if (msg.kind === 'bot_mention') {
       await this.react(request, 'pending');
-      if (cls.reply_to_user) await this.post(msg.channel, msg.thread_ts, cls.reply_to_user);
+      if (cls.reply_to_user && !ownDm) await this.post(msg.channel, msg.thread_ts, cls.reply_to_user);
     }
   }
 
@@ -183,10 +196,10 @@ export class Service {
       case 'forward': return this.forward(request, d.text, msg);
       case 'forward_or_card': {
         const owner = ownerById(this.config, request.owner);
-        const card = await this.chat.dm(request.owner, {
-          text: `Follow-up needs your OK on req ${request.id}`,
+        const card = await this.toOwner(request, {
+          text: `Follow-up from ${await this.chat.userName(msg.user)} needs your OK`,
           blocks: [
-            { type: 'section', text: { type: 'mrkdwn', text: `*Follow-up on req \`${request.id}\`* from ${await this.chat.userName(msg.user)} (${d.reason.replace('_', ' ')}):\n> ${msg.text.slice(0, 1500)}` } },
+            { type: 'section', text: { type: 'mrkdwn', text: `${this.nudge(request)}*Follow-up* from ${await this.chat.userName(msg.user)} (${d.reason.replace('_', ' ')}):\n> ${msg.text.slice(0, 1500)}` } },
             { type: 'actions', block_id: 'lekam_followup', elements: [
               { type: 'button', text: { type: 'plain_text', text: 'Forward to agent' }, style: 'primary', action_id: ACTIONS.APPROVE_ONCE, value: `${request.id}|fu|${Buffer.from(msg.text).toString('base64url')}` },
               { type: 'button', text: { type: 'plain_text', text: 'Ignore' }, action_id: ACTIONS.IGNORE, value: `${request.id}|fu` },
@@ -199,8 +212,10 @@ export class Service {
     }
   }
 
-  async forward(request, text, msg) {
-    if (!['RUNNING', 'DONE', 'APPROVED', 'INVESTIGATING'].includes(request.state)) return;
+  async forward(request, text, msg, { owner = false } = {}) {
+    // The owner may keep talking to a session after its result was posted or discarded.
+    const ok = ['RUNNING', 'DONE', 'APPROVED', 'INVESTIGATING', ...(owner ? ['RELEASED', 'DISCARDED'] : [])];
+    if (!ok.includes(request.state)) return;
     const exec = this.exec(request.owner);
     if (request.state === 'DONE') {
       // Re-open: a follow-up after completion continues the same thread; new turn on same or new session.
@@ -217,14 +232,22 @@ export class Service {
       }
       const { result } = await exec.send({ request, text });
       await this.deliverResult(this.store.getRequest(request.id), result, { followup: true });
-    } catch (e) { this.log('error', `forward failed: ${e.message}`); this.store.audit('forward_failed', request.id, null, { message: e.message }); }
+    } catch (e) { this.log('error', `forward failed: ${e.message}`); this.store.audit('forward_failed', request.id, null, { message: e.message }); await this.toOwner(request, `Couldn't reach the agent: ${e.message}`).catch(() => {}); }
   }
 
   async pipeToSession(request, msg) {
     try {
       const { result } = await this.exec(request.owner).send({ request, text: msg.text });
-      await this.chat.dm(request.owner, result.text || `(agent finished with status ${result.status})`, request.card.ts);
-    } catch (e) { await this.chat.dm(request.owner, `Couldn't reach the session: ${e.message}`, request.card.ts); }
+      await this.toOwner(request, result.text || `(agent finished with status ${result.status})`);
+    } catch (e) { await this.toOwner(request, `Couldn't reach the session: ${e.message}`); }
+  }
+
+  /** The owner wrote in a request's DM thread. */
+  async onSessionReply(r, msg) {
+    if (r.state === 'INVESTIGATING') return this.pipeToSession(r, msg);
+    if (r.state === 'PENDING_APPROVAL') return this.toOwner(r, `Use the buttons above to start the agent (or *Edit brief* to change the plan).`);
+    if (!['RUNNING', 'DONE', 'APPROVED', 'RELEASED', 'DISCARDED'].includes(r.state) || !r.scope) return this.toOwner(r, `This request is closed (${r.state.toLowerCase()}). Message me again to start a new one.`);
+    return this.forward(r, msg.text, msg, { owner: true });
   }
 
   // ---------- owner actions ----------
@@ -292,7 +315,8 @@ export class Service {
           return;
         }
         case ACTIONS.POST_RESULT: {
-          this.store.transition(id, 'RELEASED', { actor: a.user });
+          if (request.state === 'DONE') this.store.transition(id, 'RELEASED', { actor: a.user });
+          else this.store.audit('result_reposted', id, a.user, { state: request.state });
           const posted = await this.postFor(request, request.outcome?.text || '(no report)');
           await this.react(request, 'done');
           const link = await this.chat.permalink(request.channel, posted?.ts ?? request.origin_ts);
@@ -301,7 +325,7 @@ export class Service {
           return;
         }
         case ACTIONS.DISCARD_RESULT: {
-          this.store.transition(id, 'DISCARDED', { actor: a.user });
+          if (request.state === 'DONE') this.store.transition(id, 'DISCARDED', { actor: a.user });
           await this.react(request, 'done');
           await this.chat.update(a.channel, a.message_ts, { text: `Discarded ${fmtTime()}`, blocks: [{ type: 'section', text: { type: 'mrkdwn', text: `*Discarded* ${fmtTime()}` } }] });
           return;
@@ -352,8 +376,8 @@ export class Service {
     try {
       const { sessionId, result } = await exec.startInvestigation({ request, brief: request.brief, permalink: args.permalink, requesterName: args.requesterName, onStarted: async (id) => { this.store.setSession(request.id, id); await this.updateCard(request, investigatingCard({ ...args, request: this.store.getRequest(request.id) }, { agentLink: exec.agentLink(id) })); } });
       this.store.audit('investigation_plan', request.id, null, { session: sessionId, status: result.status });
-      await this.chat.dm(request.owner, result.text || `(agent stopped with status ${result.status}${result.error ? ': ' + result.error : ''})`, request.card.ts);
-    } catch (e) { this.log('error', `investigate failed: ${e.message}`); await this.chat.dm(request.owner, `Investigation failed: ${e.message}`, request.card?.ts); }
+      await this.toOwner(request, this.nudge(request) + (result.text || `(agent stopped with status ${result.status}${result.error ? ': ' + result.error : ''})`));
+    } catch (e) { this.log('error', `investigate failed: ${e.message}`); await this.toOwner(request, `Investigation failed: ${e.message}`); }
   }
 
   async deliverResult(request, result, { followup = false } = {}) {
@@ -366,8 +390,16 @@ export class Service {
     if (r.state === 'RUNNING') this.store.transition(r.id, 'DONE');
     // Results always wait for the owner: Post to thread / Discard.
     const link = this.exec(r.owner).agentLink(r.session_id);
-    await this.chat.dm(r.owner, resultCard({ request: r, report: outcome.text || '(no report)', agentLink: link, permalink: await this.chat.permalink(r.channel, r.origin_ts), postAs: this.postsAsOwner(r) ? this.ownerName(r.owner) : null }));
-    if (!followup) await this.updateCard(r, actionedCard(await this.cardArgs(r), 'Finished, result sent to you'));
+    if (this.ownerOwnDm(r)) {
+      // The owner asked in their own DM: nobody else to release it to, so the report is simply the reply.
+      await this.toOwner(r, outcome.text || '(no report)');
+      if (this.store.getRequest(r.id).state === 'DONE') this.store.transition(r.id, 'RELEASED');
+      await this.react(r, 'done');
+      if (!followup) await this.updateCard(r, actionedCard(await this.cardArgs(r), 'Done'));
+      return;
+    }
+    await this.toOwner(r, resultCard({ request: r, report: outcome.text || '(no report)', agentLink: link, permalink: await this.chat.permalink(r.channel, r.origin_ts), postAs: this.postsAsOwner(r) ? this.ownerName(r.owner) : null, mention: this.nudge(r) }));
+    if (!followup) await this.updateCard(r, actionedCard(await this.cardArgs(r), 'Finished, result is in this thread'));
   }
 
   async fail(request, reason) {
@@ -376,6 +408,7 @@ export class Service {
     await this.react(request, 'failed');
     const link = this.exec(request.owner).agentLink(request.session_id);
     await this.updateCard(request, actionedCard(await this.cardArgs(request), `Failed: ${String(reason).slice(0, 200)}`, link ? [{ type: 'context', elements: [{ type: 'mrkdwn', text: `<${link}|open in Paseo>` }] }] : []));
+    if (request.card) await this.toOwner(request, `${this.nudge(request)}Failed: ${String(reason).slice(0, 300)}${link ? ` · <${link}|open in Paseo>` : ''}`).catch(() => {});
     if (request.kind === 'bot_mention') await this.post(request.channel, request.thread_ts, `That didn't go through (${String(reason).slice(0, 120)}). ${this.ownerName(request.owner)} has the details.`);
   }
 

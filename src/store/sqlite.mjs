@@ -77,7 +77,8 @@ export class Store {
   }
 
   findByCard(channel, ts) {
-    return rowToRequest(this.db.prepare(`SELECT * FROM requests WHERE json_extract(card,'$.channel')=? AND json_extract(card,'$.ts')=? ORDER BY created_at DESC LIMIT 1`).get(channel, ts));
+    // A card's session thread is anchored on the card itself, or on the owner's own DM message the card replied to.
+    return rowToRequest(this.db.prepare(`SELECT * FROM requests WHERE json_extract(card,'$.channel')=? AND (json_extract(card,'$.ts')=? OR json_extract(card,'$.thread')=?) ORDER BY created_at DESC LIMIT 1`).get(channel, ts, ts));
   }
 
   listByState(...states) {

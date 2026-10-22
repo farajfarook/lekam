@@ -107,12 +107,12 @@ export function investigatingCard(args, { agentLink }) {
   };
 }
 
-export function resultCard({ request, report, agentLink, permalink = null, postAs = null }) {
+export function resultCard({ request, report, agentLink, permalink = null, postAs = null, mention = '' }) {
   const ask = trunc(request.request_text.replace(/\n+/g, ' '), 80);
   return {
     text: `Result: ${trunc(report, 100)}`, unfurl_links: false, unfurl_media: false,
     blocks: [
-      ctx(`Result for ${permalink ? `<${permalink}|${ask}>` : ask}${agentLink ? ` · <${agentLink}|Paseo>` : ''}`),
+      ctx(`${mention}Result for ${permalink ? `<${permalink}|${ask}>` : ask}${agentLink ? ` · <${agentLink}|Paseo>` : ''}`),
       md(trunc(report, 2800)),
       { type: 'actions', block_id: 'lekam_result', elements: [btn(postAs ? `Post to thread as ${postAs}` : 'Post to thread', ACTIONS.POST_RESULT, request.id, 'primary'), btn('Discard', ACTIONS.DISCARD_RESULT, request.id)] },
     ],
