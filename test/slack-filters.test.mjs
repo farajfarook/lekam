@@ -58,3 +58,12 @@ test('DMs: Lekam\'s own DMs are bot mentions; DMs people send a capturing owner 
   assert.deepEqual([toOwner.kind, toOwner.owner, toOwner.dm, toOwner.is_dm], ['owner_mention', 'UOWN', true, false]);
   assert.equal(await classifyEvent({ type: 'message', channel_type: 'im', user: 'UOWN', channel: 'DOWNER_TING', ts: '3', text: 'sure' }, c), null);
 });
+test('no loops: Lekam\'s own DMs to the owner, other bots, and posts made as the owner are never picked up', async () => {
+  const c = { ...ctx(), dmOwner: async () => 'UOWN' }; // even if a DM looked like the owner's personal DM
+  for (const ev of [
+    { type: 'message', channel_type: 'im', bot_id: 'BLEKAM', user: 'UBOT', channel: 'DLEKAM', ts: '1', text: 'Result for ... Post to thread' }, // Lekam's card/result
+    { type: 'message', channel_type: 'im', subtype: 'bot_message', bot_id: 'BJIRA', channel: 'DJIRA', ts: '2', text: 'Jira: you were assigned OP-1' }, // another app
+    { type: 'message', channel_type: 'im', user: 'UBOT', channel: 'DLEKAM', ts: '3', text: 'hello' }, // Lekam's user id
+    { type: 'message', channel_type: 'im', user: 'UOWN', channel: 'DTING', ts: '4', text: 'Looking into this :eyes:' }, // posted as the owner
+  ]) assert.equal(await classifyEvent(ev, c), null, JSON.stringify(ev));
+});
