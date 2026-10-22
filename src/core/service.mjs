@@ -4,8 +4,9 @@ import { buildCatalogue } from './catalogue.mjs';
 import { decideNew, decideFollowup, forcesCard } from './router.mjs';
 import { isEngaged } from './state.mjs';
 import { loadPeople, peopleForPrompt, tagPeople } from './people.mjs';
+import { ownerMessage, chatFollowup } from '../executor/briefs.mjs';
 import { ttlFor, rateLimited, ownerOverloaded, fmtTime } from '../approvals/policy.mjs';
-import { ACTIONS, approvalCard, actionedCard, investigatingCard, resultCard, editBriefView, briefFromView } from '../approvals/cards.mjs';
+import { ACTIONS, approvalCard, actionedCard, investigatingCard, resultCard, agentReplyCard, editBriefView, briefFromView } from '../approvals/cards.mjs';
 
 export class Service {
   constructor({ config, store, chat, brain, executors, log = () => {} }) {
@@ -76,6 +77,9 @@ export class Service {
     for (const m of request.classification?.thread_excerpt ?? []) excerpt.push({ name: await this.chat.userName(m.user), text: m.text });
     return { request, config: this.config, excerpt, requesterName: await this.chat.userName(request.requester), permalink: await this.chat.permalink(request.channel, request.origin_ts), channelName: await this.chat.channelName(request.channel), lowConfidence: (request.classification?.confidence ?? 1) < this.config.brain.threshold };
   }
+  /** A card's button carries the outcome version it showed (v<at>); refuse actions from an older card. Cards from before versioning pass. */
+  staleCard(request, tag) { return !!tag && tag.startsWith('v') && tag !== `v${request.outcome?.at}`; }
+
   /** The agent's report rewritten as the owner's own friendly Slack reply; null (post the raw report) if the brain can't. */
   async ownerVoice(r, report) {
     if (!this.brain.rewriteAsOwner) return null;
@@ -205,7 +209,7 @@ export class Service {
     switch (d.type) {
       case 'ignore': return;
       case 'reply': return this.post(msg.channel, msg.thread_ts, d.text);
-      case 'forward': return this.forward(request, d.text, msg);
+      case 'forward': return this.forward(request, d.text, msg, { ownerTurn: msg.user === request.owner, fromName: await this.chat.userName(msg.user) });
       case 'forward_or_card': {
         const owner = ownerById(this.config, request.owner);
         const card = await this.toOwner(request, {
@@ -224,11 +228,18 @@ export class Service {
     }
   }
 
-  async forward(request, text, msg, { owner = false } = {}) {
+  /** What the agent receives: owner messages carry the owner token (authoritative); anyone else's are marked untrusted. */
+  agentText(request, text, { ownerTurn, fromName }) {
+    return ownerTurn ? ownerMessage({ config: this.config, request, ownerName: this.ownerName(request.owner), text }) : chatFollowup({ fromName, text });
+  }
+
+  /** ownerTurn: the owner is talking to the agent (DM session thread or the channel thread) - show the agent's answer to them as-is. */
+  async forward(request, text, msg, { owner = false, ownerTurn = false, fromName = null } = {}) {
     // The owner may keep talking to a session after its result was posted or discarded.
     const ok = ['RUNNING', 'DONE', 'APPROVED', 'INVESTIGATING', ...(owner ? ['RELEASED', 'DISCARDED'] : [])];
     if (!ok.includes(request.state)) return;
     const exec = this.exec(request.owner);
+    text = this.agentText(request, text, { ownerTurn, fromName });
     if (request.state === 'DONE') {
       // Re-open: a follow-up after completion continues the same thread; new turn on same or new session.
       await this.react(request, 'running');
@@ -237,19 +248,20 @@ export class Service {
       if (!(await exec.alive(request))) {
         const args = await this.cardArgs(request);
         const { sessionId, result } = await exec.start({ request, brief: request.brief, allowed: request.scope?.outward_actions ?? [], permalink: args.permalink, requesterName: args.requesterName, previousOutcome: request.outcome, onStarted: (id) => this.store.setSession(request.id, id) });
-        this.store.audit('session_handoff', request.id, msg?.user ?? null, { session: sessionId });
-        await exec.send({ request: this.store.getRequest(request.id), text });
-        await this.deliverResult(this.store.getRequest(request.id), result);
+        this.store.audit('session_handoff', request.id, msg?.user ?? null, { session: sessionId, handoff_status: result.status });
+        // The handoff turn only restores context; the answer that matters is the reply to this message.
+        const { result: reply } = await exec.send({ request: this.store.getRequest(request.id), text });
+        await this.deliverResult(this.store.getRequest(request.id), reply, { followup: true, ownerTurn });
         return;
       }
       const { result } = await exec.send({ request, text });
-      await this.deliverResult(this.store.getRequest(request.id), result, { followup: true });
+      await this.deliverResult(this.store.getRequest(request.id), result, { followup: true, ownerTurn });
     } catch (e) { this.log('error', `forward failed: ${e.message}`); this.store.audit('forward_failed', request.id, null, { message: e.message }); await this.toOwner(request, `Couldn't reach the agent: ${e.message}`).catch(() => {}); }
   }
 
   async pipeToSession(request, msg) {
     try {
-      const { result } = await this.exec(request.owner).send({ request, text: msg.text });
+      const { result } = await this.exec(request.owner).send({ request, text: this.agentText(request, msg.text, { ownerTurn: true }) });
       await this.toOwner(request, result.text || `(agent finished with status ${result.status})`);
     } catch (e) { await this.toOwner(request, `Couldn't reach the session: ${e.message}`); }
   }
@@ -259,7 +271,7 @@ export class Service {
     if (r.state === 'INVESTIGATING') return this.pipeToSession(r, msg);
     if (r.state === 'PENDING_APPROVAL') return this.toOwner(r, `Use the buttons above to start the agent (or *Edit brief* to change the plan).`);
     if (!['RUNNING', 'DONE', 'APPROVED', 'RELEASED', 'DISCARDED'].includes(r.state) || !r.scope) return this.toOwner(r, `This request is closed (${r.state.toLowerCase()}). Message me again to start a new one.`);
-    return this.forward(r, msg.text, msg, { owner: true });
+    return this.forward(r, msg.text, msg, { owner: true, ownerTurn: true });
   }
 
   // ---------- owner actions ----------
@@ -283,7 +295,7 @@ export class Service {
             const text = Buffer.from(extra ?? '', 'base64url').toString();
             await this.chat.update(a.channel, a.message_ts, { text: `Forwarded ${fmtTime()}`, blocks: [{ type: 'section', text: { type: 'mrkdwn', text: `*Forwarded* ${fmtTime()}\n> ${text.slice(0, 1500)}` } }] });
             this.store.audit('followup_forwarded', id, a.user, {});
-            return this.forward(request, text, { user: a.user });
+            return this.forward(request, text, { user: a.user }, { fromName: 'someone in the thread' });
           }
           const mode = a.action_id === ACTIONS.APPROVE_ONCE ? 'once' : 'task';
           const outward = this.grantedOutward(request, { none: a.action_id === ACTIONS.DELEGATE_NO_OUTWARD });
@@ -326,7 +338,18 @@ export class Service {
           await this.updateCard(request, actionedCard(await args(), 'Dropped'));
           return;
         }
+        case ACTIONS.DRAFT_REPLY: {
+          if (this.staleCard(request, tag)) return this.chat.ephemeral(a.channel, a.user, `There's a newer reply from the agent below; use that one.`);
+          const voiced = await this.ownerVoice(request, request.outcome?.text || '');
+          const outcome = { ...request.outcome, voiced: !!voiced, post_text: tagPeople(voiced ?? request.outcome?.text ?? '', loadPeople(this.config, { log: this.log }), { plain: new Set([request.owner]) }) };
+          const r2 = this.store.updateRequest(id, { outcome });
+          if (a.message_ts) await this.chat.update(a.channel, a.message_ts, agentReplyCard({ request: r2, text: request.outcome?.text || '', version: outcome.at, drafted: true }));
+          await this.toOwner(r2, resultCard({ request: r2, report: outcome.post_text || '(empty)', rewritten: outcome.voiced, version: outcome.at, agentLink: this.exec(r2.owner).agentLink(r2.session_id), permalink: await this.chat.permalink(r2.channel, r2.origin_ts), postAs: this.ownerName(r2.owner) }));
+          return;
+        }
         case ACTIONS.POST_RESULT: {
+          if (this.staleCard(request, tag)) return this.chat.ephemeral(a.channel, a.user, `That result is out of date; use the latest card in this thread.`);
+          if (this.postsAsOwner(request) && !request.outcome?.post_text) return this.chat.ephemeral(a.channel, a.user, `Press *Draft reply* first so you can see exactly what will be posted as you.`);
           if (request.state === 'DONE') this.store.transition(id, 'RELEASED', { actor: a.user });
           else this.store.audit('result_reposted', id, a.user, { state: request.state });
           const posted = await this.postFor(request, request.outcome?.post_text || request.outcome?.text || '(no report)');
@@ -392,11 +415,20 @@ export class Service {
     } catch (e) { this.log('error', `investigate failed: ${e.message}`); await this.toOwner(request, `Investigation failed: ${e.message}`); }
   }
 
-  async deliverResult(request, result, { followup = false } = {}) {
+  async deliverResult(request, result, { followup = false, ownerTurn = false } = {}) {
     if (request.state === 'APPROVED') this.store.transition(request.id, 'RUNNING'); // queued-then-finished edge
     const r = this.store.getRequest(request.id);
     if (result.status === 'error' || result.status === 'timeout') return this.fail(r, result.error ?? result.status);
     const outcome = { text: result.text, status: result.status, summary: result.text.split('\n')[0].slice(0, 200), at: Date.now() };
+    if (ownerTurn && !this.ownerOwnDm(r)) {
+      // The agent is answering the owner: show it as-is. Posting it is a separate step (Draft reply / Post to thread).
+      outcome.post_text = this.postsAsOwner(r) ? null : tagPeople(result.text, loadPeople(this.config, { log: this.log }), { plain: new Set([r.owner]) });
+      this.store.updateRequest(r.id, { outcome });
+      this.store.finishSession(r.id);
+      if (r.state === 'RUNNING') this.store.transition(r.id, 'DONE');
+      await this.toOwner(r, agentReplyCard({ request: r, text: result.text || `(agent finished with status ${result.status})`, version: outcome.at, postAs: this.postsAsOwner(r) ? this.ownerName(r.owner) : null }));
+      return;
+    }
     // Work out the exact thread text now so the card shows it: in the owner's voice when posting as them,
     // and with people @-tagged either way (never the owner, who is the one posting or approving).
     if (result.text) {
@@ -417,7 +449,7 @@ export class Service {
       if (!followup) await this.updateCard(r, actionedCard(await this.cardArgs(r), 'Done'));
       return;
     }
-    await this.toOwner(r, resultCard({ request: r, report: outcome.post_text || outcome.text || '(no report)', rewritten: !!outcome.voiced, agentLink: link, permalink: await this.chat.permalink(r.channel, r.origin_ts), postAs: this.postsAsOwner(r) ? this.ownerName(r.owner) : null, mention: this.nudge(r) }));
+    await this.toOwner(r, resultCard({ request: r, report: outcome.post_text || outcome.text || '(no report)', rewritten: !!outcome.voiced, version: outcome.at, agentLink: link, permalink: await this.chat.permalink(r.channel, r.origin_ts), postAs: this.postsAsOwner(r) ? this.ownerName(r.owner) : null, mention: this.nudge(r) }));
     if (!followup) await this.updateCard(r, actionedCard(await this.cardArgs(r), 'Finished, result is in this thread'));
   }
 

@@ -54,6 +54,7 @@ store:
 outward_actions:
   jira_comment: Comment on Jira
   pr_create: Raise a pull request
+  pr_review: Approve or review a pull request
   slack_post: Post to Slack
   email_send: Send email
   deploy_approve: Approve a deployment

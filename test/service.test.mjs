@@ -106,7 +106,7 @@ test('follow-ups: in-scope forwards, scope change cards, owner bypasses, approve
   await h.chat.inject({ kind: 'followup', channel: CHAN, thread_ts: m.thread_ts, user: REQ, text: 'also check the CSV one' });
   await tick();
   assert.equal(h.exec.calls.at(-1)[0], 'send');
-  assert.equal(h.exec.calls.at(-1)[1].text, 'also check the CSV one');
+  assert.ok(h.exec.calls.at(-1)[1].text.includes('also check the CSV one') && h.exec.calls.at(-1)[1].text.includes('<chat-followup from="name:UREQ">'), 'non-owner follow-ups are marked untrusted');
   // scope change -> card, no send
   fu = 'scope_change';
   const sends = h.exec.calls.length;
@@ -121,7 +121,7 @@ test('follow-ups: in-scope forwards, scope change cards, owner bypasses, approve
   // owner follow-up bypasses everything
   await h.chat.inject({ kind: 'followup', channel: CHAN, thread_ts: m.thread_ts, user: OWNER, text: 'use the test branch' });
   await tick();
-  assert.equal(h.exec.calls.at(-1)[1].text, 'use the test branch');
+  assert.ok(h.exec.calls.at(-1)[1].text.includes('use the test branch') && h.exec.calls.at(-1)[1].text.startsWith('<owner-message token='), 'owner follow-ups carry the owner token');
   assert.ok(h.chat.dms.length > dmsBefore);
 });
 
@@ -315,7 +315,7 @@ test('session thread: result card, failures and owner replies all live under the
   assert.equal(h.store.getRequest(req.id).state, 'RELEASED');
   // owner keeps talking to the agent in the card thread after posting
   await h.chat.inject({ kind: 'bot_mention', is_dm: true, channel: card.channel, thread_ts: card.ts, user: OWNER, text: 'also do the CSV' }); await tick();
-  assert.equal(h.exec.calls.at(-1)[1].text, 'also do the CSV');
+  assert.match(h.exec.calls.at(-1)[1].text, /^<owner-message token="[0-9a-f]{16}">\nalso do the CSV\n<\/owner-message>/);
   assert.equal(h.chat.lastDm().thread_ts, card.ts);
   assert.ok(JSON.stringify(h.chat.lastDm().blocks).includes('Second report.'));
   await h.chat.click(ACTIONS.POST_RESULT, req.id, OWNER, h.chat.lastDm());
@@ -335,7 +335,7 @@ test('owner DMs Lekam: card, result and replies thread under the owner\'s own me
   assert.deepEqual([h.chat.lastDm().text, h.chat.lastDm().thread_ts], ['Here you go.', m.ts]);
   assert.equal(h.store.getRequest(req.id).state, 'RELEASED');
   await h.chat.inject({ kind: 'bot_mention', is_dm: true, channel: DM, thread_ts: m.ts, user: OWNER, text: 'and last week?' }); await tick();
-  assert.equal(h.exec.calls.at(-1)[1].text, 'and last week?');
+  assert.ok(h.exec.calls.at(-1)[1].text.includes('and last week?'));
   assert.deepEqual([h.chat.lastDm().text, h.chat.lastDm().thread_ts], ['More.', m.ts]);
   assert.equal(h.store.listByState('PENDING_APPROVAL').length, 0, 'thread reply did not open a new request');
 });
@@ -395,4 +395,36 @@ test('posted results @-tag people from the people file, on the card and in the t
   await h.chat.click(ACTIONS.APPROVE_TASK, h.store.findByThread(CHAN, b.thread_ts).id, OWNER, h.chat.lastDm()); await tick();
   await h.chat.click(ACTIONS.POST_RESULT, h.store.findByThread(CHAN, b.thread_ts).id, OWNER, h.chat.lastDm());
   assert.equal(h.chat.posts.at(-1).text, 'PR #196 by <@UADHY>, reviewed by Faraj.');
+});
+
+test('owner steering a posting-as-owner session: agent answers the owner as-is, Draft reply rewrites, stale cards refuse', async () => {
+  let turn = 0;
+  const h = await harness({ execScript: { start: 'Verdict: APPROVE. Not posted yet.', send: () => ({ status: 'idle', text: ++turn === 1 ? 'Approved PR 156 on GitHub.' : 'Also left the nits.', error: null }) } });
+  h.chat.postAs = new Set([OWNER]);
+  h.brain.rewriteAsOwner = async ({ report }) => `Hey :+1: ${report}`;
+  const m = await h.chat.inject({ kind: 'owner_mention', owner: OWNER, channel: CHAN, user: REQ, text: 'please re-review PR 156' });
+  const req = h.store.findByThread(CHAN, m.thread_ts);
+  const card = h.chat.dms[0];
+  await h.chat.click(ACTIONS.DELEGATE, req.id, OWNER, card); await tick();
+  const firstResult = h.chat.lastDm();
+  const firstValue = firstResult.blocks.find((b) => b.type === 'actions').elements[0].value;
+  // owner steers in the session thread
+  await h.chat.inject({ kind: 'bot_mention', is_dm: true, channel: card.channel, thread_ts: card.ts, user: OWNER, text: 'just approve it' }); await tick();
+  const sent = h.exec.calls.at(-1)[1].text;
+  assert.ok(sent.includes('just approve it') && sent.includes('authoritative'), 'owner message is marked authoritative');
+  const reply = h.chat.lastDm();
+  assert.ok(JSON.stringify(reply.blocks).includes('Approved PR 156 on GitHub.'), 'agent reply shown as-is, not rewritten');
+  assert.ok(!JSON.stringify(reply.blocks).includes('Hey :+1:'));
+  const draftBtn = reply.blocks.find((b) => b.type === 'actions').elements[0];
+  assert.equal(draftBtn.text.text, 'Draft reply as Faraj');
+  // the older result card can no longer post (it would post stale text as Faraj)
+  const posts = h.chat.posts.length;
+  await h.chat.click(ACTIONS.POST_RESULT, firstValue, OWNER, firstResult);
+  assert.equal(h.chat.posts.length, posts); assert.match(h.chat.ephemerals.at(-1).text, /out of date/);
+  // draft, then post
+  await h.chat.click(ACTIONS.DRAFT_REPLY, draftBtn.value, OWNER, reply);
+  const draft = h.chat.lastDm();
+  assert.ok(JSON.stringify(draft.blocks).includes('Hey :+1: Approved PR 156 on GitHub.'));
+  await h.chat.click(ACTIONS.POST_RESULT, draft.blocks.find((b) => b.type === 'actions').elements[0].value, OWNER, draft);
+  assert.deepEqual([h.chat.posts.at(-1).text, h.chat.posts.at(-1).as], ['Hey :+1: Approved PR 156 on GitHub.', OWNER]);
 });

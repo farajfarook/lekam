@@ -86,3 +86,10 @@ Every agent Lekam creates SHALL have its workspace assigned the Paseo workspace 
 #### Scenario: label reused
 - **WHEN** the daemon already has a label "Lekam" (amber) and Lekam creates an agent
 - **THEN** the agent's workspace is assigned "Lekam" and no second label is created
+
+### Requirement: Owner steering
+Messages from the owner forwarded to a session (DM session thread, investigation chat, or the owner posting in the channel thread) SHALL be wrapped in `<owner-message token="T">` where T is a per-request token derived from a Lekam secret and stated in the session's brief; the shipped guardrails SHALL tell the agent that only such messages come from the owner and that they are authoritative (they confirm actions a skill waits on and can allow outward actions not listed). Follow-ups from anyone else SHALL be wrapped as `<chat-followup>` and marked untrusted, with any owner-message tags stripped. The agent's reply to an owner message SHALL be shown to the owner as-is (no owner-voice rewrite) with **Draft reply as <owner>** (posting as the owner) or **Post to thread**; drafting rewrites and tags it and shows the exact text with Post / Discard. Result and reply buttons SHALL carry the outcome version they showed and refuse to act when a newer outcome exists.
+
+#### Scenario: owner says approve
+- **WHEN** the owner replies "just approve it" in a PR review session's DM thread
+- **THEN** the agent receives it inside an owner-message block with the brief's token, and its answer is shown to the owner unrewritten

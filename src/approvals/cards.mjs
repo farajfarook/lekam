@@ -15,6 +15,7 @@ export const ACTIONS = Object.freeze({
   POST_RESULT: 'lekam_post_result',
   DISCARD_RESULT: 'lekam_discard_result',
   OUTWARD_SELECT: 'lekam_outward_select',
+  DRAFT_REPLY: 'lekam_draft_reply',
 });
 export const EDIT_VIEW_ID = 'lekam_edit_brief';
 
@@ -107,16 +108,26 @@ export function investigatingCard(args, { agentLink }) {
   };
 }
 
-export function resultCard({ request, report, agentLink, permalink = null, postAs = null, mention = '', rewritten = false }) {
+export function resultCard({ request, report, agentLink, permalink = null, postAs = null, mention = '', rewritten = false, version = null }) {
+  const v = version ? `${request.id}|v${version}` : request.id;
   const ask = trunc(request.request_text.replace(/\n+/g, ' '), 80);
   return {
     text: `Result: ${trunc(report, 100)}`, unfurl_links: false, unfurl_media: false,
     blocks: [
       ctx(`${mention}Result for ${permalink ? `<${permalink}|${ask}>` : ask}${agentLink ? ` · <${agentLink}|${rewritten ? 'full report in Paseo' : 'Paseo'}>` : ''}${rewritten ? ` · _in your words, exactly as it will be posted_` : ''}`),
       md(trunc(report, 2800)),
-      { type: 'actions', block_id: 'lekam_result', elements: [btn(postAs ? `Post to thread as ${postAs}` : 'Post to thread', ACTIONS.POST_RESULT, request.id, 'primary'), btn('Discard', ACTIONS.DISCARD_RESULT, request.id)] },
+      { type: 'actions', block_id: 'lekam_result', elements: [btn(postAs ? `Post to thread as ${postAs}` : 'Post to thread', ACTIONS.POST_RESULT, v, 'primary'), btn('Discard', ACTIONS.DISCARD_RESULT, v)] },
     ],
   };
+}
+
+/** The agent answering the owner in the session thread: shown as-is. One button to turn it into a thread reply. */
+export function agentReplyCard({ request, text, version, postAs = null, drafted = false }) {
+  const v = `${request.id}|v${version}`;
+  const blocks = [md(trunc(text || '(empty)', 2900))];
+  if (drafted) blocks.push(ctx('_Draft below_'));
+  else blocks.push({ type: 'actions', block_id: 'lekam_agent_reply', elements: [postAs ? btn(`Draft reply as ${postAs}`, ACTIONS.DRAFT_REPLY, v) : btn('Post to thread', ACTIONS.POST_RESULT, v)] });
+  return { text: trunc(text || '(empty)', 150), blocks };
 }
 
 /** Modal for Edit brief. */
