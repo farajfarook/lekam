@@ -71,6 +71,12 @@ agent_tools:
   - "Jira: tickets, sprints"
   - "GitHub: PRs, CI checks"
 
+# Optional: people to @-tag in posted results. A JSON roster ({members:[{name, slackId, github}]} or a list),
+# and/or inline entries.
+# people_file: ./roster.json
+# people:
+#   - { name: Jane Doe, slack_id: U0123456789, github: jdoe, aliases: [Janey] }
+
 skills_dirs:
   - ~/.agents/skills
 

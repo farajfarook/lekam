@@ -75,6 +75,7 @@ Everything personal lives in `lekam.yml`, `persona.md` (the bot's voice) and `gu
 - `brain` — endpoint, models (`classify_model`, optional stronger `brief_model`), `threshold` (owner-mentions below it never card), context sizes.
 - `approvals` — TTLs per kind (expiry = deny), `force_card_patterns`, `outward_actions_mode`.
 - `outward_actions` — the ids the brain may propose and you approve per request.
+- `people_file` / `people` — who to @-tag in posted results (a JSON roster like `{members:[{name, slackId, github}]}`, or inline `{name, slack_id, github, aliases}`). Names, GitHub logins and the owner-voice rewrite's references become Slack mentions; the owner is never tagged.
 - `agent_tools` — plain-text list of live data sources your agents can reach (HR, Jira, CI…). Without it the brain may shrug at questions like "any leave plans?" instead of carding them.
 - `repos`, `skills_dirs` — the catalogue the brain sees. Skills are read from `*/SKILL.md` frontmatter (`name`, `description`, optional `lekam_outward_actions`). A `catalogue_file` can replace the auto-generated skills section.
 

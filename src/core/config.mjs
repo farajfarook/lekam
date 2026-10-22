@@ -66,6 +66,8 @@ export function resolveConfig(raw, { baseDir = process.cwd(), envLookup = env } 
     return { name: r.name, url: r.url ?? null, default_branch: r.default_branch ?? 'main', notes: r.notes ?? '' };
   });
   c.agent_tools = (raw.agent_tools ?? []).map(String);
+  c.people_file = raw.people_file ? path.resolve(baseDir, expandHome(raw.people_file)) : null;
+  c.people = Array.isArray(raw.people) ? raw.people : [];
   c.skills_dirs = (raw.skills_dirs ?? []).map((d) => path.resolve(baseDir, expandHome(d)));
 
   c.chat.thread_engagement_ms = parseDuration(c.chat.thread_engagement, 'chat.thread_engagement');

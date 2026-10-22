@@ -32,7 +32,7 @@ export const DEFAULT_VOICE = `Friendly, warm and direct, like a team lead replyi
 - Offer a next step only if there is a real one.`;
 
 /** System prompt for rewriting an agent report as the owner's own Slack reply. */
-export function ownerVoicePrompt({ ownerName, voice }) {
+export function ownerVoicePrompt({ ownerName, voice, people = '' }) {
   return `You rewrite an agent's report into the Slack reply ${ownerName} will post under their own name, answering the person who asked.
 
 # ${ownerName}'s voice
@@ -45,7 +45,10 @@ ${(voice || DEFAULT_VOICE).trim()}
 - First person as ${ownerName} ("I", "we", "the team"); never mention Lekam, agents, AI, or that this was rewritten.
 - Slack mrkdwn: *bold*, _italic_, "-" bullets. No headings, no tables, no sign-off.
 - If asked_by is null, ${ownerName} asked the question themselves: no greeting, just the answer.
-- Similar length or shorter than the report.
+- Similar length or shorter than the report.${people ? `
+- People: when you refer to anyone in the list below (by name, first name, nickname or GitHub login), write their placeholder exactly, e.g. "Owner: {{@jane-doe}}", instead of the name or login, and don't repeat the login after it. Use each placeholder only for that person; never invent one. Write ${ownerName} as "I"/"me", not a placeholder.
+
+${people}` : ''}
 Output ONLY the message text.`;
 }
 

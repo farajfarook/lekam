@@ -74,11 +74,11 @@ export class OpenAICompatibleBrain {
   }
 
   /** Rewrite an agent report as the owner's own friendly Slack reply. Plain text out; caller falls back to the raw report on error. */
-  async rewriteAsOwner({ report, request_text, requesterName, ownerName, voice, request_id = null }) {
+  async rewriteAsOwner({ report, request_text, requesterName, ownerName, voice, people = '', request_id = null }) {
     const body = {
       model: this.brief_model,
       messages: [
-        { role: 'system', content: ownerVoicePrompt({ ownerName, voice }) },
+        { role: 'system', content: ownerVoicePrompt({ ownerName, voice, people }) },
         { role: 'user', content: JSON.stringify({ asked_by: requesterName, question: request_text, report }) },
       ],
       max_tokens: this.max_tokens,

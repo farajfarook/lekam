@@ -373,3 +373,26 @@ test('owner-voice rewrite failure falls back to the raw report; Lekam posts are 
   await h.chat.click(ACTIONS.APPROVE_TASK, h.store.findByThread(CHAN, b.thread_ts).id, OWNER, h.chat.lastDm()); await tick();
   assert.equal(calls, 1, 'bot-mention results are not rewritten');
 });
+
+test('posted results @-tag people from the people file, on the card and in the thread', async () => {
+  const fs = await import('node:fs'); const os = await import('node:os'); const path = await import('node:path');
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'lekam-')), 'roster.json');
+  fs.writeFileSync(file, JSON.stringify({ members: [{ name: 'Adhy Karina', slackId: 'UADHY', github: 'rms-adhy-karina' }, { name: 'Faraj', slackId: OWNER, github: 'farajfarook' }] }));
+  const config = testConfig({ people_file: file });
+  const h = await harness({ config, execScript: { start: 'PR #196 by `rms-adhy-karina`, reviewed by farajfarook.' } });
+  h.chat.postAs = new Set([OWNER]);
+  let prompt;
+  h.brain.rewriteAsOwner = async ({ people }) => { prompt = people; return 'Hey :+1: #196 is from {{@adhy-karina}}, I reviewed it.'; };
+  const m = await h.chat.inject({ kind: 'owner_mention', owner: OWNER, channel: CHAN, user: REQ, text: 'any PRs?' });
+  const req = h.store.findByThread(CHAN, m.thread_ts);
+  await h.chat.click(ACTIONS.DELEGATE, req.id, OWNER, h.chat.dms[0]); await tick();
+  assert.ok(prompt.includes('{{@adhy-karina}}') && !prompt.includes(OWNER), 'owner not offered as a placeholder');
+  assert.ok(JSON.stringify(h.chat.lastDm().blocks).includes('#196 is from <@UADHY>'));
+  await h.chat.click(ACTIONS.POST_RESULT, req.id, OWNER, h.chat.lastDm());
+  assert.equal(h.chat.posts.at(-1).text, 'Hey :+1: #196 is from <@UADHY>, I reviewed it.');
+  // Lekam posts (no rewrite) are tagged too; the owner is never tagged
+  const b = await h.chat.inject({ kind: 'bot_mention', channel: CHAN, user: REQ, text: 'fix the export' });
+  await h.chat.click(ACTIONS.APPROVE_TASK, h.store.findByThread(CHAN, b.thread_ts).id, OWNER, h.chat.lastDm()); await tick();
+  await h.chat.click(ACTIONS.POST_RESULT, h.store.findByThread(CHAN, b.thread_ts).id, OWNER, h.chat.lastDm());
+  assert.equal(h.chat.posts.at(-1).text, 'PR #196 by <@UADHY>, reviewed by Faraj.');
+});
