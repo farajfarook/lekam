@@ -25,6 +25,8 @@ test('decideNew owner_mention', () => {
   assert.equal(decideNew({ kind: 'owner_mention' }, cls({ intent: 'question', actionable: true }), c).type, 'card', 'tool question to the owner is work');
   assert.equal(decideNew({ kind: 'owner_mention' }, cls({ intent: 'question', actionable: true, confidence: 0.5 }), c).type, 'ignore');
   assert.equal(decideNew({ kind: 'owner_mention' }, cls({ actionable: false }), c).type, 'ignore');
+  assert.deepEqual(decideNew({ kind: 'owner_mention', self: true }, cls({ intent: 'question', actionable: true, confidence: 0.4 }), c), { type: 'card', kind: 'owner_mention', lowConfidence: true }, 'self-tag never dropped for confidence');
+  assert.equal(decideNew({ kind: 'owner_mention', self: true }, cls({ intent: 'chitchat', reply_to_user: 'Hi.' }), c).type, 'ignore', 'self-tag chit-chat stays quiet');
 });
 test('decideFollowup', () => {
   const req = { owner: 'UO', scope: { outward_actions: [] }, approval_mode: 'task' };

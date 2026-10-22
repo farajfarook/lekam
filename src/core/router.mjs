@@ -25,6 +25,11 @@ export function decideNew(message, cls, config) {
   const low = cls.confidence < config.brain.threshold;
   // A question an agent needs tools to answer ("what did the team do today") is work, like a task.
   const toolQuestion = cls.intent === 'question' && cls.actionable;
+  if (kind === 'owner_mention' && message.self) {
+    // The owner tagged themselves: they are certainly asking. Card any work or lookup (flag low confidence), else stay quiet.
+    if (cls.intent === 'task_request' || toolQuestion) return { type: 'card', kind, lowConfidence: low };
+    return { type: 'ignore', reason: `self_tag_${cls.intent}` };
+  }
   if (kind === 'owner_mention') {
     if ((cls.intent === 'task_request' || toolQuestion) && cls.actionable && !low) return { type: 'card', kind, lowConfidence: false };
     return { type: 'ignore', reason: low ? 'below_threshold' : `intent_${cls.intent}` };

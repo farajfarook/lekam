@@ -26,8 +26,8 @@ Slack ──Socket Mode──▶ lekam ──▶ brain (LLM, JSON only, no tools
 
 | Someone… | Lekam… |
 |---|---|
-| mentions `@Lekam` with a task or a question that needs live data (the owner tagging themselves counts as this) | reacts 👀, sends the owner a card (verbatim request, proposed brief, skill, repo, outward-action checkboxes). Buttons: Approve task · Approve once · Discuss first · Edit brief · Decline |
-| tags **the owner** with a task or a question that needs tools ("what did your team do today?") | stays silent in the channel; DMs the owner: Delegate · Delegate (no outward actions) · Discuss first · Edit brief · Ignore. Only after Delegate does it speak in the thread |
+| mentions `@Lekam` with a task or a question that needs live data | reacts 👀, sends the owner a card (verbatim request, proposed brief, skill, repo, outward-action checkboxes). Buttons: Approve task · Approve once · Discuss first · Edit brief · Decline |
+| tags **the owner** with a task or a question that needs tools ("what did your team do today?"). The owner can tag themselves too: never dropped for low confidence, and the answer goes out as the owner | stays silent in the channel; DMs the owner: Delegate · Delegate (no outward actions) · Discuss first · Edit brief · Ignore. Only after Delegate does it speak in the thread |
 | replies in a thread Lekam is working on | forwards in-scope follow-ups to the same agent session; cards scope changes |
 | asks something that needs no agent | answers briefly in persona, or stays quiet |
 

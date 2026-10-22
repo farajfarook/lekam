@@ -22,8 +22,10 @@ export async function classifyEvent(ev, { botUserId, ownerIds, isEngaged }) {
   const thread_ts = ev.thread_ts ?? ev.ts;
   const base = { channel, ts, thread_ts, user: ev.user, event_ts: ev.event_ts, raw_text: text, text: stripMentions(text), is_dm: ev.channel_type === 'im' };
   if (!base.text) return null;
-  // An owner tagging themselves ("@Faraj what did the team do today") is the owner asking Lekam: same as tagging Lekam.
-  if (mentions(text, botUserId) || base.is_dm || (ownerIds.has(ev.user) && mentions(text, ev.user))) return { kind: 'bot_mention', ...base };
+  if (mentions(text, botUserId) || base.is_dm) return { kind: 'bot_mention', ...base };
+  // An owner tagging themselves ("@Faraj what did the team do today") is an owner tag asked by the owner:
+  // replies go out as the owner like any owner tag, but it is never dropped for low confidence.
+  if (ownerIds.has(ev.user) && mentions(text, ev.user)) return { kind: 'owner_mention', owner: ev.user, self: true, ...base };
   const owner = [...ownerIds].find((id) => id !== ev.user && mentions(text, id));
   if (owner) return { kind: 'owner_mention', owner, ...base };
   if (ev.thread_ts && (await isEngaged(channel, ev.thread_ts))) return { kind: 'followup', ...base };
