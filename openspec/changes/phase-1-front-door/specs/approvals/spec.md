@@ -87,7 +87,7 @@ Replies on a `bot_mention` SHALL be posted as Lekam. Owner-approved posts on an 
 - **THEN** the owner receives the report by DM with Post to thread / Discard and the thread is untouched until Post is clicked
 
 ### Requirement: Rate limits
-Core SHALL enforce `limits.per_user_per_hour` (default 10) new requests per requester and `limits.pending_per_owner` (default 20) open cards; excess requests get a polite reply and no card.
+Core SHALL enforce `limits.per_user_per_hour` (default 10) new messages per requester (owners are exempt; refused messages are not counted) and `limits.pending_per_owner` (default 20) open cards; excess requests get a polite reply and no card.
 
 #### Scenario: rate limits
 - **WHEN** a requester has created `per_user_per_hour` requests in the last hour and mentions the bot again
