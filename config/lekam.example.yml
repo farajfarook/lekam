@@ -78,6 +78,7 @@ owners:
   - slack_id: U0000000000
     name: Owner
     default_for_channels: []             # bot-mentions in these channels route here
+    # voice: "Casual, warm, short sentences, the odd :slightly_smiling_face:"   # or voice_file: ./voice.md; how posts as you should sound
     # user_token_env: LEKAM_SLACK_USER_TOKEN  # optional xoxp user token (user scope chat:write): replies to people who tag YOU post as you
     executor:
       type: paseo

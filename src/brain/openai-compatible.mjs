@@ -1,6 +1,6 @@
 // The only network call the brain makes. No tools, ever.
 import { CLASSIFICATION_SCHEMA, validate, SchemaError } from './schema.mjs';
-import { systemPrompt, userTurn } from './prompt.mjs';
+import { systemPrompt, userTurn, ownerVoicePrompt } from './prompt.mjs';
 
 export class BrainError extends Error {
   constructor(message, { transient = false } = {}) { super(message); this.transient = transient; }
@@ -71,6 +71,31 @@ export class OpenAICompatibleBrain {
       }
     }
     throw lastErr instanceof BrainError ? lastErr : new BrainError(`invalid brain output: ${lastErr?.message}`);
+  }
+
+  /** Rewrite an agent report as the owner's own friendly Slack reply. Plain text out; caller falls back to the raw report on error. */
+  async rewriteAsOwner({ report, request_text, requesterName, ownerName, voice, request_id = null }) {
+    const body = {
+      model: this.brief_model,
+      messages: [
+        { role: 'system', content: ownerVoicePrompt({ ownerName, voice }) },
+        { role: 'user', content: JSON.stringify({ asked_by: requesterName, question: request_text, report }) },
+      ],
+      max_tokens: this.max_tokens,
+    };
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), this.timeout_ms);
+    try {
+      const res = await this.fetch(`${this.base_url}/chat/completions`, { method: 'POST', signal: ctl.signal, headers: { 'content-type': 'application/json', authorization: `Bearer ${this.api_key}` }, body: JSON.stringify(body) });
+      const text = await res.text();
+      if (!res.ok) throw new BrainError(`brain endpoint ${res.status}: ${excerpt(text)}`);
+      const json = JSON.parse(text);
+      this.audit('brain_call', request_id, null, { model: this.brief_model, purpose: 'owner_voice', prompt_tokens: json.usage?.prompt_tokens ?? null, completion_tokens: json.usage?.completion_tokens ?? null, cost: json.usage?.cost ?? null });
+      if (json.choices?.[0]?.finish_reason === 'length') throw new BrainError('rewrite truncated');
+      const out = stripFences(String(json.choices?.[0]?.message?.content ?? '')).trim();
+      if (!out) throw new BrainError('empty rewrite');
+      return out;
+    } finally { clearTimeout(timer); }
   }
 
   /** Optional second pass with the brief model: re-run the same contract and keep only the brief. */

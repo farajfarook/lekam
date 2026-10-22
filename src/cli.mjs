@@ -27,7 +27,7 @@ async function buildExecutors(config) {
 }
 
 async function buildChat(config) {
-  if (config.chat.platform === 'slack') { const { SlackAdapter } = await import('./chat/slack/adapter.mjs'); return new SlackAdapter({ bot_token: config.chat.bot_token, app_token: config.chat.app_token, ownerIds: config.ownerIds, userTokens: new Map(config.owners.filter((o) => o.user_token).map((o) => [o.slack_id, o.user_token])), log }); }
+  if (config.chat.platform === 'slack') { const { SlackAdapter } = await import('./chat/slack/adapter.mjs'); return new SlackAdapter({ bot_token: config.chat.bot_token, app_token: config.chat.app_token, ownerIds: config.ownerIds, userTokens: new Map(config.owners.filter((o) => o.user_token).map((o) => [o.slack_id, o.user_token])), ownerPostFooter: config.chat.owner_post_footer !== false, log }); }
   const { FakeChat } = await import('./chat/fake.mjs'); return new FakeChat({ ownerIds: config.ownerIds, log });
 }
 

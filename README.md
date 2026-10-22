@@ -20,7 +20,7 @@ Slack ──Socket Mode──▶ lekam ──▶ brain (LLM, JSON only, no tools
 - Approval is a Block Kit button pressed by a configured owner. Text, reactions and timeouts never approve. Timeouts deny.
 - The owner approves a *scope* (brief + allowed outward actions). Follow-ups that stay in scope flow to the same agent; anything that smells like a scope change (new repo, PR, deploy, Jira, prod…) comes back as a new card.
 - Results always go to the owner first, with **Post to thread** / **Discard**. Nothing reaches the thread without that second tap.
-- Who speaks: replies when someone tagged **Lekam** come from Lekam. Replies when someone tagged **the owner** come from the owner's own account if `user_token_env` is set (see Install), else from Lekam.
+- Who speaks: replies when someone tagged **Lekam** come from Lekam. Replies when someone tagged **the owner** come from the owner's own account if `user_token_env` is set (see Install), else from Lekam. Posts as the owner are rewritten in the owner's voice first (friendly, Slack-style, an emoji or two at most; facts and links kept exactly), the result card shows exactly that text, and a small grey *Sent using Lekam* line is added underneath (`chat.owner_post_footer: false` turns it off). Set `owners[].voice` or `voice_file` to describe how you write; there is a sensible default.
 
 ## What it does
 

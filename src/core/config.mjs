@@ -27,7 +27,7 @@ function env(name, { required = true } = {}) {
 }
 
 const DEFAULTS = {
-  chat: { platform: 'slack', thread_engagement: '24h', reactions: { pending: 'eyes', running: 'gear', done: 'white_check_mark', declined: 'no_entry_sign', failed: 'x', needs_info: 'question' } },
+  chat: { platform: 'slack', thread_engagement: '24h', owner_post_footer: true, reactions: { pending: 'eyes', running: 'gear', done: 'white_check_mark', declined: 'no_entry_sign', failed: 'x', needs_info: 'question' } },
   brain: { threshold: 0.7, thread_context_messages: 20, recent_outcomes: 10, catalogue_max_chars: 16000, timeout_ms: 30000, max_tokens: 2500 },
   approvals: { ttl_bot_mention: '24h', ttl_owner_mention: '4h', outward_actions_mode: 'ask', force_card_patterns: ['\\bPR\\b', '\\bdeploy', '\\bmerge\\b', '\\bprod\\b', '\\bjira\\b', '\\bemail\\b', '\\bdelete\\b'] },
   limits: { per_user_per_hour: 10, pending_per_owner: 20 },
@@ -107,7 +107,8 @@ export function resolveConfig(raw, { baseDir = process.cwd(), envLookup = env } 
     ex.run_timeout_ms = parseDuration(ex.run_timeout, `owners[${i}].executor.run_timeout`);
     // Optional Slack user token (xoxp, user scope chat:write): owner-approved replies to owner-tags post as the owner.
     const user_token = o.user_token_env ? envLookup(o.user_token_env, { required: false }) || null : null;
-    return { slack_id: o.slack_id, name: o.name ?? o.slack_id, default_for_channels: o.default_for_channels ?? [], user_token_env: o.user_token_env ?? null, user_token, executor: ex };
+    const voice = o.voice_file ? readText(o.voice_file, baseDir, `owners[${i}].voice_file`) : (o.voice ?? null);
+    return { slack_id: o.slack_id, name: o.name ?? o.slack_id, default_for_channels: o.default_for_channels ?? [], user_token_env: o.user_token_env ?? null, user_token, voice, executor: ex };
   });
   c.ownerIds = new Set(c.owners.map((o) => o.slack_id));
   c.secretValues = [c.chat.bot_token, c.chat.app_token, c.brain.api_key, ...c.owners.map((o) => o.user_token)].filter(Boolean);

@@ -33,7 +33,8 @@ export async function classifyEvent(ev, { botUserId, ownerIds, isEngaged }) {
 }
 
 export class SlackAdapter {
-  constructor({ bot_token, app_token, ownerIds, userTokens = new Map(), log = () => {} }) {
+  constructor({ bot_token, app_token, ownerIds, userTokens = new Map(), ownerPostFooter = true, log = () => {} }) {
+    this.ownerPostFooter = ownerPostFooter; this.appId = null;
     this.ownerIds = ownerIds; this.log = log; this.botUserId = null;
     this.tokens = { bot_token, app_token };
     this.userTokens = userTokens; this.userClients = new Map(); // owner id -> WebClient posting as that owner
@@ -53,6 +54,7 @@ export class SlackAdapter {
     this.client = this.app.client;
     const auth = await this.client.auth.test();
     this.botUserId = auth.user_id;
+    try { this.appId = (await this.client.bots.info({ bot: auth.bot_id })).bot?.app_id ?? null; } catch (e) { this.log('warn', `bots.info failed: ${e.message}`); }
     if (this.userTokens.size) {
       const { WebClient } = await import('@slack/web-api');
       for (const [id, token] of this.userTokens) {
@@ -111,7 +113,8 @@ export class SlackAdapter {
     if (!client) { const r = await this.client.chat.postMessage({ channel, thread_ts, ...m }); return { channel: r.channel, ts: r.ts }; }
     const echo = { channel, user: as, norm: normText(m.text), ts: null, until: Date.now() + 120_000 };
     this.echoes.push(echo); // registered before the call: the event can beat the HTTP response
-    const r = await client.chat.postMessage({ channel, thread_ts, ...m });
+    const body = this.ownerPostFooter ? withFooter(m, this.appId) : m;
+    const r = await client.chat.postMessage({ channel, thread_ts, unfurl_links: false, unfurl_media: false, ...body });
     echo.ts = r.ts;
     return { channel: r.channel, ts: r.ts, as };
   }
@@ -152,6 +155,24 @@ export class SlackAdapter {
     if (this.channelNames.has(id)) return this.channelNames.get(id);
     try { const c = await this.client.conversations.info({ channel: id }); const n = c.channel?.name ?? null; this.channelNames.set(id, n); return n; } catch { return null; }
   }
+}
+
+/** Pure: add a small grey "Sent using Lekam" line under a message posted as an owner (no @-mention, so it can't tag Lekam). */
+export function withFooter(m, appId = null) {
+  const name = appId ? `<https://slack.com/app_redirect?app=${appId}|Lekam>` : 'Lekam';
+  const footer = { type: 'context', elements: [{ type: 'mrkdwn', text: `*Sent using* ${name}` }] };
+  if (Array.isArray(m.blocks)) return { ...m, blocks: [...m.blocks, footer] };
+  // Section text is capped at 3000 chars: split long messages on paragraph (then line) boundaries.
+  const chunks = [];
+  let cur = '';
+  for (const para of String(m.text ?? '').split(/(\n\n)/)) {
+    if ((cur + para).length > 2900 && cur) { chunks.push(cur); cur = ''; }
+    cur += para;
+    while (cur.length > 2900) { const cut = cur.lastIndexOf('\n', 2900) > 0 ? cur.lastIndexOf('\n', 2900) : 2900; chunks.push(cur.slice(0, cut)); cur = cur.slice(cut).replace(/^\n/, ''); }
+  }
+  if (cur.trim()) chunks.push(cur);
+  const sections = chunks.slice(0, 48).map((t) => ({ type: 'section', text: { type: 'mrkdwn', text: t } }));
+  return { ...m, blocks: [...sections, footer] };
 }
 
 /** Pure: comparable form of a message text (Slack escapes &<> and may reflow whitespace). */

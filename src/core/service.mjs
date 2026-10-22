@@ -56,7 +56,7 @@ export class Service {
   /** Thread ack after Delegate/Proceed on an owner tag. None when the owner tagged themselves. */
   async ackPickup(r) {
     if (r.kind !== 'owner_mention' || r.requester === r.owner) return;
-    await this.postFor(r, this.postsAsOwner(r) ? `Looking into this, I'll reply here.` : `${this.ownerName(r.owner)} asked me to pick this up. I'll post back here when there's something to see.`);
+    await this.postFor(r, this.postsAsOwner(r) ? `Looking into this :eyes: I'll get back to you here shortly.` : `${this.ownerName(r.owner)} asked me to pick this up. I'll post back here when there's something to see.`);
   }
   react(request, key) { return this.setReaction(request, this.config.chat.reactions[key]); }
   setReaction(request, name) {
@@ -75,6 +75,15 @@ export class Service {
     for (const m of request.classification?.thread_excerpt ?? []) excerpt.push({ name: await this.chat.userName(m.user), text: m.text });
     return { request, config: this.config, excerpt, requesterName: await this.chat.userName(request.requester), permalink: await this.chat.permalink(request.channel, request.origin_ts), channelName: await this.chat.channelName(request.channel), lowConfidence: (request.classification?.confidence ?? 1) < this.config.brain.threshold };
   }
+  /** The agent's report rewritten as the owner's own friendly Slack reply; null (post the raw report) if the brain can't. */
+  async ownerVoice(r, report) {
+    if (!this.brain.rewriteAsOwner) return null;
+    const owner = ownerById(this.config, r.owner);
+    try {
+      return await this.brain.rewriteAsOwner({ report, request_text: r.request_text, requesterName: r.requester === r.owner ? null : await this.chat.userName(r.requester), ownerName: owner?.name ?? 'the owner', voice: owner?.voice ?? null, request_id: r.id });
+    } catch (e) { this.log('warn', `owner-voice rewrite failed for ${r.id}: ${e.message}`); this.store.audit('owner_voice_failed', r.id, null, { message: e.message }); return null; }
+  }
+
   // ---------- the owner's session thread ----------
   // Everything about one request (card, follow-up cards, investigation chat, results, failures) lives in one DM thread:
   // under the approval card, or under the owner's own message when the owner DM'd Lekam.
@@ -318,11 +327,11 @@ export class Service {
         case ACTIONS.POST_RESULT: {
           if (request.state === 'DONE') this.store.transition(id, 'RELEASED', { actor: a.user });
           else this.store.audit('result_reposted', id, a.user, { state: request.state });
-          const posted = await this.postFor(request, request.outcome?.text || '(no report)');
+          const posted = await this.postFor(request, (this.postsAsOwner(request) && request.outcome?.post_text) || request.outcome?.text || '(no report)');
           await this.react(request, 'done');
           const link = await this.chat.permalink(request.channel, posted?.ts ?? request.origin_ts);
           const done = `*Posted${posted?.as ? ` as ${this.ownerName(request.owner)}` : ''}* ${fmtTime()}${link ? ` · <${link}|view>` : ''}`;
-          await this.chat.update(a.channel, a.message_ts, { text: `Posted ${fmtTime()}`, blocks: [{ type: 'section', text: { type: 'mrkdwn', text: `${done}\n${(request.outcome?.text || '').slice(0, 2800)}` } }] });
+          await this.chat.update(a.channel, a.message_ts, { text: `Posted ${fmtTime()}`, blocks: [{ type: 'section', text: { type: 'mrkdwn', text: `${done}\n${((posted?.as && request.outcome?.post_text) || request.outcome?.text || '').slice(0, 2800)}` } }] });
           return;
         }
         case ACTIONS.DISCARD_RESULT: {
@@ -386,6 +395,8 @@ export class Service {
     const r = this.store.getRequest(request.id);
     if (result.status === 'error' || result.status === 'timeout') return this.fail(r, result.error ?? result.status);
     const outcome = { text: result.text, status: result.status, summary: result.text.split('\n')[0].slice(0, 200), at: Date.now() };
+    // Posting as the owner: rewrite the report in their voice now, so the card shows exactly what will be posted.
+    if (this.postsAsOwner(r) && result.text) outcome.post_text = await this.ownerVoice(r, result.text);
     this.store.updateRequest(r.id, { outcome });
     this.store.finishSession(r.id);
     if (r.state === 'RUNNING') this.store.transition(r.id, 'DONE');
@@ -399,7 +410,7 @@ export class Service {
       if (!followup) await this.updateCard(r, actionedCard(await this.cardArgs(r), 'Done'));
       return;
     }
-    await this.toOwner(r, resultCard({ request: r, report: outcome.text || '(no report)', agentLink: link, permalink: await this.chat.permalink(r.channel, r.origin_ts), postAs: this.postsAsOwner(r) ? this.ownerName(r.owner) : null, mention: this.nudge(r) }));
+    await this.toOwner(r, resultCard({ request: r, report: outcome.post_text || outcome.text || '(no report)', rewritten: !!outcome.post_text, agentLink: link, permalink: await this.chat.permalink(r.channel, r.origin_ts), postAs: this.postsAsOwner(r) ? this.ownerName(r.owner) : null, mention: this.nudge(r) }));
     if (!followup) await this.updateCard(r, actionedCard(await this.cardArgs(r), 'Finished, result is in this thread'));
   }
 

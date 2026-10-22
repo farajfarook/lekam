@@ -346,3 +346,30 @@ test('owners are never rate limited', async () => {
   assert.ok(!h.chat.posts.some((p) => /a lot my way/.test(p.text)));
   assert.ok(!h.store.auditTail(50).some((r) => r.type === 'rate_limited'));
 });
+
+test('posting as the owner: report is rewritten in their voice, the card shows exactly that, and Post sends it', async () => {
+  const h = await harness({ execScript: { start: 'There are 2 open PRs. I ran gh pr list. I took no outward actions.' } });
+  h.chat.postAs = new Set([OWNER]);
+  h.brain.rewriteAsOwner = async ({ report, ownerName }) => `Hey! 2 open PRs right now :+1: (${ownerName})`;
+  const m = await h.chat.inject({ kind: 'owner_mention', owner: OWNER, channel: CHAN, user: REQ, text: 'any open PRs?' });
+  const req = h.store.findByThread(CHAN, m.thread_ts);
+  await h.chat.click(ACTIONS.DELEGATE, req.id, OWNER, h.chat.dms[0]); await tick();
+  const card = JSON.stringify(h.chat.lastDm().blocks);
+  assert.ok(card.includes('Hey! 2 open PRs right now :+1: (Faraj)') && card.includes('exactly as it will be posted'));
+  assert.ok(!card.includes('I ran gh pr list'));
+  await h.chat.click(ACTIONS.POST_RESULT, req.id, OWNER, h.chat.lastDm());
+  assert.deepEqual([h.chat.posts.at(-1).text, h.chat.posts.at(-1).as], ['Hey! 2 open PRs right now :+1: (Faraj)', OWNER]);
+});
+
+test('owner-voice rewrite failure falls back to the raw report; Lekam posts are never rewritten', async () => {
+  const h = await harness({ execScript: { start: 'Raw report.' } });
+  h.chat.postAs = new Set([OWNER]);
+  let calls = 0;
+  h.brain.rewriteAsOwner = async () => { calls++; throw new Error('502'); };
+  const m = await h.chat.inject({ kind: 'owner_mention', owner: OWNER, channel: CHAN, user: REQ, text: 'any open PRs?' });
+  await h.chat.click(ACTIONS.DELEGATE, h.store.findByThread(CHAN, m.thread_ts).id, OWNER, h.chat.dms[0]); await tick();
+  assert.ok(JSON.stringify(h.chat.lastDm().blocks).includes('Raw report.'));
+  const b = await h.chat.inject({ kind: 'bot_mention', channel: CHAN, user: REQ, text: 'fix the export' });
+  await h.chat.click(ACTIONS.APPROVE_TASK, h.store.findByThread(CHAN, b.thread_ts).id, OWNER, h.chat.lastDm()); await tick();
+  assert.equal(calls, 1, 'bot-mention results are not rewritten');
+});

@@ -42,3 +42,13 @@ test('request body has no tools; usage audited; retry on bad json; 5xx retried w
   await assert.rejects(() => b.classify({ kind: 'bot_mention', requester: 'U', channel: 'C', text: 'hi' }, { persona: 'p', catalogue: 'c' }), BrainError);
   assert.equal(bodies.length, 1, 'no retry on 401');
 });
+
+test('owner-voice prompt keeps facts and links, drops narration, caps emoji', async () => {
+  const { ownerVoicePrompt } = await import('../src/brain/prompt.mjs');
+  const p = ownerVoicePrompt({ ownerName: 'Faraj' });
+  for (const k of ['Keep every fact exactly', '<https://x|label>', 'process narration', 'Never more than two', 'never mention Lekam']) assert.ok(p.includes(k), k);
+  const bodies = [];
+  const b = new OpenAICompatibleBrain({ base_url: 'http://x/v1', api_key: 'k', classify_model: 'm', fetch: async (u, init) => { bodies.push(JSON.parse(init.body)); return { ok: true, status: 200, text: async () => JSON.stringify({ choices: [{ message: { content: 'Hey Ting, all good :+1:' } }] }) }; } });
+  assert.equal(await b.rewriteAsOwner({ report: 'r', request_text: 'q', requesterName: 'Ting', ownerName: 'Faraj' }), 'Hey Ting, all good :+1:');
+  assert.ok(!('response_format' in bodies[0]) && !('tools' in bodies[0]));
+});
