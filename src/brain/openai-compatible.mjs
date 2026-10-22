@@ -2,12 +2,17 @@
 import { CLASSIFICATION_SCHEMA, validate, SchemaError } from './schema.mjs';
 import { systemPrompt, userTurn } from './prompt.mjs';
 
-export class BrainError extends Error {}
+export class BrainError extends Error {
+  constructor(message, { transient = false } = {}) { super(message); this.transient = transient; }
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** Endpoint error bodies are often HTML (Cloudflare 502 pages): keep a short, tag-free excerpt. */
+const excerpt = (t) => String(t).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
 
 export class OpenAICompatibleBrain {
   /** @param {object} o config.brain + { fetch?, audit?, log? } */
-  constructor({ base_url, api_key, classify_model, brief_model, timeout_ms = 30000, max_tokens = 2500, fetch: f = globalThis.fetch, audit = () => {}, log = () => {} }) {
-    Object.assign(this, { base_url, api_key, classify_model, brief_model: brief_model ?? classify_model, timeout_ms, max_tokens, fetch: f, audit, log });
+  constructor({ base_url, api_key, classify_model, brief_model, timeout_ms = 30000, max_tokens = 2500, retry_delays_ms = [1000, 4000], fetch: f = globalThis.fetch, audit = () => {}, log = () => {} }) {
+    Object.assign(this, { base_url, api_key, classify_model, brief_model: brief_model ?? classify_model, timeout_ms, max_tokens, retry_delays_ms, fetch: f, audit, log });
   }
 
   buildBody(model, system, user) {
@@ -26,13 +31,15 @@ export class OpenAICompatibleBrain {
     const timer = setTimeout(() => ctl.abort(), this.timeout_ms);
     let res, json;
     try {
-      res = await this.fetch(`${this.base_url}/chat/completions`, {
-        method: 'POST', signal: ctl.signal,
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${this.api_key}` },
-        body: JSON.stringify(body),
-      });
+      try {
+        res = await this.fetch(`${this.base_url}/chat/completions`, {
+          method: 'POST', signal: ctl.signal,
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${this.api_key}` },
+          body: JSON.stringify(body),
+        });
+      } catch (e) { throw new BrainError(`brain endpoint unreachable: ${e.name === 'AbortError' ? `timeout after ${this.timeout_ms}ms` : e.message}`, { transient: true }); }
       const text = await res.text();
-      if (!res.ok) throw new BrainError(`brain endpoint ${res.status}: ${text.slice(0, 300)}`);
+      if (!res.ok) throw new BrainError(`brain endpoint ${res.status}: ${excerpt(text)}`, { transient: res.status === 429 || res.status >= 500 });
       json = JSON.parse(text);
     } finally { clearTimeout(timer); }
     const u = json.usage ?? {};
@@ -47,13 +54,20 @@ export class OpenAICompatibleBrain {
   async classify(input, { persona, catalogue, outcomes, ownerName, request_id } = {}) {
     const system = systemPrompt({ persona, catalogue, outcomes, ownerName });
     const user = userTurn({ ...input, ownerName });
-    let lastErr;
-    for (let attempt = 0; attempt < 2; attempt++) {
+    let lastErr, badOutput = 0, transient = 0;
+    for (;;) {
       try { return await this.call(this.classify_model, system, user, { request_id }); }
       catch (e) {
         lastErr = e;
-        if (e instanceof BrainError || e.name === 'AbortError') break; // endpoint failure: don't hammer
-        this.log('warn', `brain returned invalid output (attempt ${attempt + 1}): ${e.message}`);
+        if (e instanceof BrainError) {
+          // 429/5xx/network: back off and retry a couple of times; other endpoint errors (401, 400) fail fast.
+          if (!e.transient || transient >= this.retry_delays_ms.length) break;
+          this.log('warn', `${e.message}; retrying in ${this.retry_delays_ms[transient]}ms`);
+          await sleep(this.retry_delays_ms[transient++]);
+          continue;
+        }
+        if (++badOutput >= 2) break; // invalid JSON/schema: one retry
+        this.log('warn', `brain returned invalid output (attempt ${badOutput}): ${e.message}`);
       }
     }
     throw lastErr instanceof BrainError ? lastErr : new BrainError(`invalid brain output: ${lastErr?.message}`);

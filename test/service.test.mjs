@@ -285,3 +285,15 @@ test('outward_actions_mode: all grants everything and skips keyword cards; propo
   await h.chat.click(ACTIONS.APPROVE_TASK, req.id, OWNER, h.chat.dms[0]); await tick();
   assert.deepEqual(h.store.getRequest(req.id).scope.outward_actions, ['jira_comment', 'pr_create']);
 });
+
+test('brain down: the message still reaches the owner as a card with the raw text, and the asker gets an honest ack', async () => {
+  const h = await harness({ brainScript: () => { throw new Error('brain endpoint 502'); } });
+  await h.chat.inject({ kind: 'bot_mention', channel: CHAN, user: REQ, text: 'who did what last week' });
+  const m = await h.chat.inject({ kind: 'bot_mention', channel: CHAN, user: REQ, text: 'ai and portal team for last 1 month' });
+  const req = h.store.findByThread(CHAN, m.thread_ts);
+  assert.equal(req.state, 'PENDING_APPROVAL');
+  const s = JSON.stringify(h.chat.lastDm().blocks);
+  assert.ok(s.includes('not pre-read') && s.includes('ai and portal team for last 1 month'));
+  assert.match(h.chat.posts.at(-1).text, /passed this to Faraj/);
+  assert.ok(!h.chat.posts.some((p) => /make sense/.test(p.text)));
+});

@@ -19,7 +19,7 @@ test('prompt contains persona first, catalogue, outcomes, and no tool words', ()
   const u = JSON.parse(userTurn({ kind: 'bot_mention', requester: 'U', channel: 'C', text: 'hi', thread: [{ user: 'U', text: 'a', ts: '1' }], ownerName: 'F' }));
   assert.deepEqual(u.thread_excerpt, [{ user: 'U', text: 'a' }]);
 });
-test('request body has no tools; usage audited; retry on bad json; endpoint errors not retried', async () => {
+test('request body has no tools; usage audited; retry on bad json; 5xx retried with backoff; 4xx not', async () => {
   const bodies = []; const audits = []; let n = 0;
   const mk = (responses) => async (url, init) => { bodies.push(JSON.parse(init.body)); const r = responses[n++]; return { ok: r.status === 200, status: r.status, headers: { get: () => null }, text: async () => JSON.stringify(r.body) }; };
   const good = { status: 200, body: { choices: [{ message: { content: '```json\n' + JSON.stringify(cls()) + '\n```' } }], usage: { prompt_tokens: 10, completion_tokens: 5 } } };
@@ -30,7 +30,15 @@ test('request body has no tools; usage audited; retry on bad json; endpoint erro
   for (const body of bodies) { assert.ok(!('tools' in body) && !('functions' in body) && !('tool_choice' in body)); assert.deepEqual(body.response_format.json_schema, CLASSIFICATION_SCHEMA); }
   assert.equal(audits.at(-1)[3].prompt_tokens, 10);
   n = 0; bodies.length = 0;
-  b = new OpenAICompatibleBrain({ base_url: 'http://x/v1', api_key: 'k', classify_model: 'm', fetch: mk([{ status: 500, body: 'down' }, good]) });
+  b = new OpenAICompatibleBrain({ base_url: 'http://x/v1', api_key: 'k', classify_model: 'm', retry_delays_ms: [0, 0], fetch: mk([{ status: 502, body: '<html>bad gateway</html>' }, good]) });
+  assert.equal((await b.classify({ kind: 'bot_mention', requester: 'U', channel: 'C', text: 'hi' }, { persona: 'p', catalogue: 'c' })).intent, 'task_request');
+  assert.equal(bodies.length, 2, '502 retried');
+  n = 0; bodies.length = 0;
+  b = new OpenAICompatibleBrain({ base_url: 'http://x/v1', api_key: 'k', classify_model: 'm', retry_delays_ms: [0, 0], fetch: mk([{ status: 503, body: 'x' }, { status: 503, body: 'x' }, { status: 503, body: '<p>still down</p>' }, good]) });
+  await assert.rejects(() => b.classify({ kind: 'bot_mention', requester: 'U', channel: 'C', text: 'hi' }, { persona: 'p', catalogue: 'c' }), /brain endpoint 503: "still down"|503/);
+  assert.equal(bodies.length, 3, 'gives up after the backoff schedule');
+  n = 0; bodies.length = 0;
+  b = new OpenAICompatibleBrain({ base_url: 'http://x/v1', api_key: 'k', classify_model: 'm', retry_delays_ms: [0, 0], fetch: mk([{ status: 401, body: 'nope' }, good]) });
   await assert.rejects(() => b.classify({ kind: 'bot_mention', requester: 'U', channel: 'C', text: 'hi' }, { persona: 'p', catalogue: 'c' }), BrainError);
-  assert.equal(bodies.length, 1, 'no retry on endpoint failure');
+  assert.equal(bodies.length, 1, 'no retry on 401');
 });

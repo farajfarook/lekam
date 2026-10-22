@@ -14,7 +14,7 @@ test('decideNew bot_mention', () => {
   assert.equal(decideNew({ kind: 'bot_mention' }, cls({ intent: 'needs_clarification', clarifying_question: 'Which repo?' }), c).question, 'Which repo?');
   assert.equal(decideNew({ kind: 'bot_mention' }, cls({ intent: 'chitchat', reply_to_user: 'Hi.' }), c).text, 'Hi.');
   assert.equal(decideNew({ kind: 'bot_mention' }, cls({ intent: 'fyi', reply_to_user: null }), c).type, 'ignore');
-  assert.equal(decideNew({ kind: 'bot_mention' }, null, c).type, 'reply');
+  assert.deepEqual(decideNew({ kind: 'bot_mention' }, null, c), { type: 'card', kind: 'bot_mention', lowConfidence: true, brainDown: true });
   assert.equal(decideNew({ kind: 'bot_mention' }, cls({ intent: 'question', actionable: true }), c).type, 'card');
   assert.equal(decideNew({ kind: 'bot_mention' }, cls({ intent: 'question', actionable: false, reply_to_user: 'Ask me anything.' }), c).type, 'reply');
 });
@@ -35,5 +35,5 @@ test('decideFollowup', () => {
   assert.equal(decideFollowup({ user: 'UR', text: 'x' }, req, cls({ followup: 'scope_change' }), c).reason, 'scope_change');
   assert.equal(decideFollowup({ user: 'UR', text: 'x' }, { ...req, approval_mode: 'once' }, cls({ followup: 'in_scope' }), c).reason, 'approve_once');
   assert.equal(decideFollowup({ user: 'UR', text: 'thanks' }, req, cls({ followup: 'not_for_agent', reply_to_user: 'Any time.' }), c).text, 'Any time.');
-  assert.equal(decideFollowup({ user: 'UR', text: 'x' }, req, null, c).reason, 'brain_error');
+  assert.deepEqual(decideFollowup({ user: 'UR', text: 'x' }, req, null, c), { type: 'forward_or_card', text: 'x', reason: 'brain_error' });
 });

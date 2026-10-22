@@ -140,8 +140,18 @@ export class Service {
         return;
       }
       case 'ignore': return;
-      case 'card': return this.openCard(msg, owner, cls, d);
+      case 'card': return this.openCard(msg, owner, cls ?? this.unreadCls(msg, thread), d);
     }
+  }
+
+  /** Stand-in classification when the brain is down: the owner sees the raw request and decides. */
+  unreadCls(msg, thread) {
+    return {
+      intent: 'task_request', actionable: true, confidence: 0, urgent: false, brain_unavailable: true, followup: null, clarifying_question: null,
+      reply_to_user: msg.kind === 'bot_mention' ? `I've passed this to ${ownerForChannel(this.config, msg.channel)?.name ?? 'the owner'}; I'll post back here.` : null,
+      brief: { summary: msg.text.slice(0, 300), skill: null, repo: null, outward_actions: [], notes: 'Not pre-read: the brain was unavailable. Read the thread for context.' },
+      thread_excerpt: thread.filter((m) => m.ts !== msg.ts && m.user !== this.chat.botUserId).slice(-4),
+    };
   }
 
   async openCard(msg, owner, cls, d) {

@@ -20,7 +20,8 @@ const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 export function decideNew(message, cls, config) {
   const { kind } = message; // bot_mention | owner_mention
-  if (!cls) return { type: 'reply', text: "I couldn't make sense of that just now. Try again in a moment." };
+  // Brain unavailable: don't drop the message and don't guess. The owner gets a card with the raw text.
+  if (!cls) return { type: 'card', kind, lowConfidence: true, brainDown: true };
   const low = cls.confidence < config.brain.threshold;
   // A question an agent needs tools to answer ("what did the team do today") is work, like a task.
   const toolQuestion = cls.intent === 'question' && cls.actionable;
@@ -42,7 +43,7 @@ export function decideFollowup(message, request, cls, config) {
   if (isOwner) return { type: 'forward', text: message.text };
   if (!request.scope) return { type: 'ignore', reason: 'not_yet_approved' }; // pending: wait for the owner
   if (forcesCard(message.text, config)) return { type: 'forward_or_card', text: message.text, reason: 'forced_pattern' };
-  if (!cls) return { type: 'ignore', reason: 'brain_error' };
+  if (!cls) return { type: 'forward_or_card', text: message.text, reason: 'brain_error' };
   if (cls.followup === 'not_for_agent') return cls.reply_to_user ? { type: 'reply', text: cls.reply_to_user } : { type: 'ignore', reason: 'not_for_agent' };
   if (cls.followup === 'scope_change' || request.approval_mode === 'once') return { type: 'forward_or_card', text: message.text, reason: cls.followup === 'scope_change' ? 'scope_change' : 'approve_once' };
   return { type: 'forward', text: message.text };

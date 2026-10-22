@@ -31,7 +31,7 @@ export const previewable = ({ permalink, channelName }) => !!(permalink && chann
 
 function headerBlocks({ request, requesterName, permalink, channelName, lowConfidence, excerpt = [] }) {
   const cls = request.classification ?? {};
-  const flags = [cls.urgent ? ':rotating_light: urgent' : null, lowConfidence ? ':grey_question: unsure this is a request' : null].filter(Boolean);
+  const flags = [cls.urgent ? ':rotating_light: urgent' : null, cls.brain_unavailable ? ':warning: not pre-read (brain unavailable), check the thread' : lowConfidence ? ':grey_question: unsure this is a request' : null].filter(Boolean);
   const blocks = [];
   if (!previewable({ permalink, channelName })) {
     // No preview possible: say who asked and quote the request verbatim instead.
