@@ -62,8 +62,9 @@ cp config/persona.md config/guardrails.md .     # edit to taste
    node src/cli.mjs run
    ```
 6. Invite the bot to a channel: `/invite @Lekam`. It only hears channels it's in.
-7. Optional, reply as yourself: the manifest asks for the user scope `chat:write`. After installing, copy the **User OAuth Token** (`xoxp-…`) from *OAuth & Permissions* into an env var and name it in `owners[].user_token_env`. `lekam check` confirms whose account it posts as.
-8. To DM Lekam: api.slack.com/apps → your app → **App Home** → **Show Tabs** → turn on **Messages Tab** and tick **Allow users to send Slash commands and messages from the messages tab**. Without it Slack shows "Sending messages to this app has been turned off". Restart the Slack client after changing it.
+7. Optional, capture your DMs: set `capture_dms: true` on your owner entry, add the user scope `im:history` and, under *Event Subscriptions → Subscribe to events on behalf of users*, the event `message.im`, then reinstall. DMs people send you are then handled like tagging you (silent card, reply as you, nothing sent without your tap). Every such DM is read by the brain model to decide whether it is a request.
+8. Optional, reply as yourself: the manifest asks for the user scope `chat:write`. After installing, copy the **User OAuth Token** (`xoxp-…`) from *OAuth & Permissions* into an env var and name it in `owners[].user_token_env`. `lekam check` confirms whose account it posts as.
+9. To DM Lekam: api.slack.com/apps → your app → **App Home** → **Show Tabs** → turn on **Messages Tab** and tick **Allow users to send Slash commands and messages from the messages tab**. Without it Slack shows "Sending messages to this app has been turned off". Restart the Slack client after changing it.
 
 As a service: `config/lekam.service` (systemd user unit). Without a login session, run `systemctl --user` with `XDG_RUNTIME_DIR=/run/user/$(id -u)` and `DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus` set, and `loginctl enable-linger $USER` so it starts at boot.
 

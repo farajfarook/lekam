@@ -25,6 +25,7 @@ oauth_config:
       - users:read
     user:
       - chat:write          # optional: lets owner-approved replies to owner-tags post as the owner
+      - im:history          # optional (capture_dms): read the DMs people send the owner
 settings:
   event_subscriptions:
     bot_events:
@@ -34,6 +35,8 @@ settings:
       - message.im
       - member_joined_channel
       - member_left_channel
+    user_events:
+      - message.im          # optional (capture_dms): DMs people send the owner
   interactivity:
     is_enabled: true
   org_deploy_enabled: false

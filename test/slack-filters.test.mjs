@@ -50,3 +50,11 @@ test('owner posts get a small "Sent using Lekam" footer without tagging Lekam; l
   assert.ok(long.blocks.filter((b) => b.type === 'section').every((b) => b.text.text.length <= 3000));
   assert.ok(long.blocks.filter((b) => b.type === 'section').length >= 3);
 });
+test('DMs: Lekam\'s own DMs are bot mentions; DMs people send a capturing owner are owner tags; the owner\'s own lines are ignored', async () => {
+  const c = { ...ctx(), dmOwner: async (ch) => (ch === 'DOWNER_TING' ? 'UOWN' : null) };
+  const toLekam = await classifyEvent({ type: 'message', channel_type: 'im', user: 'U1', channel: 'DLEKAM', ts: '1', text: 'hi lekam' }, c);
+  assert.equal(toLekam.kind, 'bot_mention'); assert.ok(toLekam.is_dm);
+  const toOwner = await classifyEvent({ type: 'message', channel_type: 'im', user: 'UTING', channel: 'DOWNER_TING', ts: '2', text: 'can you check the build?' }, c);
+  assert.deepEqual([toOwner.kind, toOwner.owner, toOwner.dm, toOwner.is_dm], ['owner_mention', 'UOWN', true, false]);
+  assert.equal(await classifyEvent({ type: 'message', channel_type: 'im', user: 'UOWN', channel: 'DOWNER_TING', ts: '3', text: 'sure' }, c), null);
+});

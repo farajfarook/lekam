@@ -428,3 +428,20 @@ test('owner steering a posting-as-owner session: agent answers the owner as-is, 
   await h.chat.click(ACTIONS.POST_RESULT, draft.blocks.find((b) => b.type === 'actions').elements[0].value, OWNER, draft);
   assert.deepEqual([h.chat.posts.at(-1).text, h.chat.posts.at(-1).as], ['Hey :+1: Approved PR 156 on GitHub.', OWNER]);
 });
+
+test('captured DM to the owner: silent card that says "messaged you", reply goes out as the owner, never rate limited', async () => {
+  const h = await harness({ execScript: { start: 'Build is green.' } });
+  h.chat.postAs = new Set([OWNER]);
+  h.chat.channelName = async () => null; // Lekam can't name a DM it isn't in
+  for (let i = 0; i < 12; i++) await h.chat.inject({ kind: 'owner_mention', owner: OWNER, dm: true, channel: 'DTING', user: 'UTING', text: `msg ${i}` });
+  assert.ok(!h.store.auditTail(80).some((r) => r.type === 'rate_limited'));
+  const m = await h.chat.inject({ kind: 'owner_mention', owner: OWNER, dm: true, channel: 'DTING', user: 'UTING', text: 'is the build green?' });
+  assert.match(h.brain.calls.at(-1).input.channel, /a direct message to Faraj/);
+  const req = h.store.findByThread('DTING', m.thread_ts);
+  const card = h.chat.dms.at(-1);
+  assert.ok(JSON.stringify(card.blocks).includes('messaged you'));
+  assert.equal(h.chat.posts.length, 0);
+  await h.chat.click(ACTIONS.DELEGATE, req.id, OWNER, card); await tick();
+  await h.chat.click(ACTIONS.POST_RESULT, req.id, OWNER, h.chat.lastDm());
+  assert.deepEqual([h.chat.posts.at(-1).channel, h.chat.posts.at(-1).as, h.chat.posts.at(-1).text], ['DTING', OWNER, 'Build is green.']);
+});

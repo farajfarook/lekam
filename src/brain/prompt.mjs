@@ -4,6 +4,7 @@ const OUTPUT_RULES = `
 Return ONLY a JSON object matching the schema you were given. Field guidance:
 - intent: task_request (someone wants work done), question (wants information), fyi, chitchat, needs_clarification (a task, but too vague to brief).
 - actionable: true only if an agent with tools could usefully do the work. Questions answerable from the thread are not actionable. Questions that need live data (Jira, GitHub PRs, Slack, standups, Datadog, "what did the team do today", "status of OP-123") ARE actionable: you cannot answer them yourself, an agent can.
+- kind=owner_mention with channel "a direct message to <owner>": someone DM'd the owner privately. Most DMs are conversation (greetings, opinions, scheduling, personal questions about the owner) and are NOT for agents: intent fyi/chitchat/question with actionable=false. Only a clear request for work, or a question an agent could answer from live data, is actionable.
 - kind=owner_mention: someone tagged the owner, or the owner tagged themselves to ask Lekam. Treat a request or actionable question addressed to the owner or "your team" as work for the owner's agents.
 - confidence: how sure you are that this is a real request for the owner's agents (0-1).
 - urgent: outages, production incidents, "everyone", "down", "since X minutes".

@@ -11,8 +11,9 @@ export function stripMentions(text = '') {
 }
 export function mentions(text = '', id) { return new RegExp(`<@${id}(?:\\|[^>]*)?>`).test(text); }
 
-/** Pure: classify a raw Slack message event into {kind,...} or null. `isEngaged(channel,thread)` is a callback. */
-export async function classifyEvent(ev, { botUserId, ownerIds, isEngaged }) {
+/** Pure: classify a raw Slack message event into {kind,...} or null. `isEngaged(channel,thread)` is a callback.
+ *  `dmOwner(channel)` returns the owner whose own 1:1 DM this is (captured via their user token), or null for Lekam's DMs. */
+export async function classifyEvent(ev, { botUserId, ownerIds, isEngaged, dmOwner = async () => null }) {
   if (!ev || ev.type !== 'message' && ev.type !== 'app_mention') return null;
   if (ev.subtype && IGNORED_SUBTYPES.has(ev.subtype)) return null;
   if (ev.bot_id || ev.user === botUserId || !ev.user) return null;
@@ -22,7 +23,13 @@ export async function classifyEvent(ev, { botUserId, ownerIds, isEngaged }) {
   const thread_ts = ev.thread_ts ?? ev.ts;
   const base = { channel, ts, thread_ts, user: ev.user, event_ts: ev.event_ts, raw_text: text, text: stripMentions(text), is_dm: ev.channel_type === 'im' };
   if (!base.text) return null;
-  if (mentions(text, botUserId) || base.is_dm) return { kind: 'bot_mention', ...base };
+  if (base.is_dm) {
+    // Someone DM'd an owner directly (not Lekam): treat it like tagging that owner. The owner's own messages are ignored.
+    const owner = await dmOwner(channel);
+    if (owner) return ev.user === owner ? null : { kind: 'owner_mention', owner, dm: true, ...base, is_dm: false };
+    return { kind: 'bot_mention', ...base };
+  }
+  if (mentions(text, botUserId)) return { kind: 'bot_mention', ...base };
   // An owner tagging themselves ("@Faraj what did the team do today") is an owner tag asked by the owner:
   // replies go out as the owner like any owner tag, but it is never dropped for low confidence.
   if (ownerIds.has(ev.user) && mentions(text, ev.user)) return { kind: 'owner_mention', owner: ev.user, self: true, ...base };
@@ -33,7 +40,8 @@ export async function classifyEvent(ev, { botUserId, ownerIds, isEngaged }) {
 }
 
 export class SlackAdapter {
-  constructor({ bot_token, app_token, ownerIds, userTokens = new Map(), ownerPostFooter = true, log = () => {} }) {
+  constructor({ bot_token, app_token, ownerIds, userTokens = new Map(), captureDms = new Set(), ownerPostFooter = true, log = () => {} }) {
+    this.captureDms = captureDms; this.dmOwners = new Map(); // channel -> owner id | null
     this.ownerPostFooter = ownerPostFooter; this.appName = 'Lekam';
     this.ownerIds = ownerIds; this.log = log; this.botUserId = null;
     this.tokens = { bot_token, app_token };
@@ -71,7 +79,7 @@ export class SlackAdapter {
       const key = `${ev.channel}:${ev.ts}`;
       if (seen.has(key)) return; seen.add(key); setTimeout(() => seen.delete(key), 60_000);
       if (this.isEcho(ev)) return;
-      const msg = await classifyEvent(ev, { botUserId: this.botUserId, ownerIds: this.ownerIds, isEngaged: this.handlers.isEngaged });
+      const msg = await classifyEvent(ev, { botUserId: this.botUserId, ownerIds: this.ownerIds, isEngaged: this.handlers.isEngaged, dmOwner: (c) => this.dmOwner(c) });
       if (!msg) return;
       msg.event_id = event_id;
       try { await this.handlers.message?.(msg); } catch (e) { this.log('error', `message handler failed: ${e.stack ?? e}`); }
@@ -104,9 +112,32 @@ export class SlackAdapter {
   async stop() { await this.app?.stop(); }
 
   // ---- surface used by core ----
-  async react(channel, ts, name) { try { await this.client.reactions.add({ channel, timestamp: ts, name }); } catch (e) { if (!/already_reacted/.test(e.message)) this.log('warn', `react failed: ${e.message}`); } }
-  async unreact(channel, ts, name) { try { await this.client.reactions.remove({ channel, timestamp: ts, name }); } catch (e) { if (!/no_reaction/.test(e.message)) this.log('warn', `unreact failed: ${e.message}`); } }
+  // Lekam can't react in an owner's personal DMs (it isn't in them): those failures are expected and quiet.
+  async react(channel, ts, name) { try { await this.client.reactions.add({ channel, timestamp: ts, name }); } catch (e) { if (!/already_reacted|channel_not_found|not_in_channel/.test(e.message)) this.log('warn', `react failed: ${e.message}`); } }
+  async unreact(channel, ts, name) { try { await this.client.reactions.remove({ channel, timestamp: ts, name }); } catch (e) { if (!/no_reaction|channel_not_found|not_in_channel/.test(e.message)) this.log('warn', `unreact failed: ${e.message}`); } }
   canPostAs(user) { return this.userClients.has(user); }
+
+  /** Whose 1:1 DM is this? Lekam's own DMs (the bot can read them) -> null; an owner's personal DM (their user token can) -> owner id. */
+  async dmOwner(channel) {
+    const capturing = [...this.userClients].filter(([id]) => this.captureDms.has(id));
+    if (!capturing.length) return null;
+    if (this.dmOwners.has(channel)) return this.dmOwners.get(channel);
+    let owner = null;
+    try { await this.client.conversations.history({ channel, limit: 1 }); } // Lekam is in it
+    catch {
+      for (const [id, c] of capturing) { try { await c.conversations.history({ channel, limit: 1 }); owner = id; break; } catch {} }
+    }
+    this.dmOwners.set(channel, owner);
+    return owner;
+  }
+  /** Bot first; for conversations Lekam isn't in (an owner's personal DMs) fall back to the owners' user tokens. */
+  async withAccess(fn) {
+    try { return await fn(this.client); } catch (e) {
+      if (!/channel_not_found|not_in_channel|missing_scope/.test(e.message)) throw e;
+      for (const c of this.userClients.values()) { try { return await fn(c); } catch {} }
+      throw e;
+    }
+  }
   /** Post in a thread; `as` = an owner id with a user token posts as that owner instead of Lekam. */
   async post(channel, thread_ts, msg, { as = null } = {}) {
     const m = outgoing(msg);
@@ -142,12 +173,12 @@ export class SlackAdapter {
   async openModal(trigger_id, view) { await this.client.views.open({ trigger_id, view }); }
   async fetchThread(channel, thread_ts, limit = 20) {
     try {
-      const r = await this.client.conversations.replies({ channel, ts: thread_ts, limit: Math.min(limit, 100) });
+      const r = await this.withAccess((c) => c.conversations.replies({ channel, ts: thread_ts, limit: Math.min(limit, 100) }));
       const msgs = (r.messages ?? []).filter((m) => !m.subtype || m.subtype === 'thread_broadcast').map((m) => ({ user: m.user ?? m.bot_id ?? '?', text: stripMentions(m.text ?? ''), ts: m.ts }));
       return msgs.slice(-limit);
     } catch (e) { this.log('warn', `fetchThread failed: ${e.message}`); return []; }
   }
-  async permalink(channel, ts) { try { return (await this.client.chat.getPermalink({ channel, message_ts: ts })).permalink; } catch { return null; } }
+  async permalink(channel, ts) { try { return (await this.withAccess((c) => c.chat.getPermalink({ channel, message_ts: ts }))).permalink; } catch { return null; } }
   async userName(id) {
     if (this.userNames.has(id)) return this.userNames.get(id);
     try { const u = await this.client.users.info({ user: id }); const n = u.user?.profile?.display_name || u.user?.real_name || id; this.userNames.set(id, n); return n; } catch { return id; }

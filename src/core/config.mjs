@@ -110,7 +110,7 @@ export function resolveConfig(raw, { baseDir = process.cwd(), envLookup = env } 
     // Optional Slack user token (xoxp, user scope chat:write): owner-approved replies to owner-tags post as the owner.
     const user_token = o.user_token_env ? envLookup(o.user_token_env, { required: false }) || null : null;
     const voice = o.voice_file ? readText(o.voice_file, baseDir, `owners[${i}].voice_file`) : (o.voice ?? null);
-    return { slack_id: o.slack_id, name: o.name ?? o.slack_id, default_for_channels: o.default_for_channels ?? [], user_token_env: o.user_token_env ?? null, user_token, voice, executor: ex };
+    return { slack_id: o.slack_id, name: o.name ?? o.slack_id, default_for_channels: o.default_for_channels ?? [], user_token_env: o.user_token_env ?? null, user_token, voice, capture_dms: o.capture_dms === true, executor: ex };
   });
   c.ownerIds = new Set(c.owners.map((o) => o.slack_id));
   c.secretValues = [c.chat.bot_token, c.chat.app_token, c.brain.api_key, ...c.owners.map((o) => o.user_token)].filter(Boolean);

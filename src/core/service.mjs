@@ -111,7 +111,7 @@ export class Service {
       for (const m of thread) named.push({ user: m.user === this.chat.botUserId ? 'Lekam' : await this.chat.userName(m.user), text: m.text, ts: m.ts });
       const channelName = await this.chat.channelName(msg.channel);
       const cls = await this.brain.classify(
-        { kind: msg.kind, requester: await this.chat.userName(msg.user), channel: channelName ? '#' + channelName : 'a direct message', text: msg.text, thread: named, approvedScope: request?.scope ?? null },
+        { kind: msg.kind, requester: await this.chat.userName(msg.user), channel: channelName ? '#' + channelName : msg.dm ? `a direct message to ${this.ownerName(ownerId)}` : 'a direct message', text: msg.text, thread: named, approvedScope: request?.scope ?? null },
         { persona: this.config.persona, catalogue: this.catalogue.text, outcomes: this.store.recentOutcomes(this.config.brain.recent_outcomes), ownerName: this.ownerName(ownerId), request_id: request?.id ?? null },
       );
       if (cls.brief) {
@@ -147,7 +147,8 @@ export class Service {
     const owner = msg.kind === 'owner_mention' ? ownerById(this.config, msg.owner) : ownerForChannel(this.config, msg.channel);
     if (!owner) return;
     if (msg.kind === 'bot_mention' && this.config.ownerIds.has(msg.user) && !msg.is_dm) { /* owners asking the bot directly are allowed: fall through */ }
-    if (rateLimited(this.store, msg.user, this.config)) {
+    // Captured DMs to the owner are mostly conversation and never answered automatically: don't count them.
+    if (!msg.dm && rateLimited(this.store, msg.user, this.config)) {
       this.store.audit('rate_limited', null, msg.user, { channel: msg.channel });
       if (msg.kind === 'bot_mention') await this.post(msg.channel, msg.thread_ts, `You've sent a lot my way this hour. Give it a little while and try again.`);
       return;

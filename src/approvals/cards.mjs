@@ -36,8 +36,8 @@ function headerBlocks({ request, requesterName, permalink, channelName, lowConfi
   const blocks = [];
   if (!previewable({ permalink, channelName })) {
     // No preview possible: say who asked and quote the request verbatim instead.
-    const kind = request.kind === 'owner_mention' ? (request.requester === request.owner ? 'asked' : 'tagged you') : 'asked Lekam';
-    blocks.push(md(`*${requesterName ?? request.requester}* ${kind} in ${channelName ? '#' + channelName : 'a DM'}${flags.length ? ' · ' + flags.join(' · ') : ''}\n${quote(trunc(request.request_text, 600))}`));
+    const kind = request.kind === 'owner_mention' ? (request.requester === request.owner ? 'asked' : String(request.channel).startsWith('D') ? 'messaged you' : 'tagged you') : 'asked Lekam';
+    blocks.push(md(`*${requesterName ?? request.requester}* ${kind} ${channelName ? 'in #' + channelName : kind === 'messaged you' ? (permalink ? `<${permalink}|directly>` : 'directly') : 'in a DM'}${flags.length ? ' · ' + flags.join(' · ') : ''}\n${quote(trunc(request.request_text, 600))}`));
   } else if (flags.length) blocks.push(ctx(flags.join(' · ')));
   if (excerpt.length) blocks.push(ctx('Earlier in the thread: ' + excerpt.slice(-2).map((m) => `${m.name}: ${trunc(m.text.replace(/\n+/g, ' '), 100)}`).join(' · ')));
   return blocks;

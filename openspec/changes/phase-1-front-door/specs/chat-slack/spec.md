@@ -101,3 +101,10 @@ The shipped manifest SHALL request exactly: `app_mentions:read`, `channels:histo
 - **WHEN** an operator installs the shipped manifest
 - **THEN** the app requests the listed scopes and events and nothing broader
 
+
+### Requirement: Captured DMs to an owner
+When an owner sets `capture_dms: true` and has a user token with `im:history` (user event `message.im`), a 1:1 DM someone else sends that owner SHALL be emitted as an `owner_mention` with `dm: true`, exactly like tagging the owner (silent card, replies post as the owner after approval). The owner's own messages in those DMs SHALL be ignored. Lekam's own DMs (readable with the bot token) SHALL keep their `bot_mention` behaviour. Captured DMs SHALL NOT count towards the sender's rate limit.
+
+#### Scenario: colleague DMs the owner
+- **WHEN** Ting DMs Faraj "is the build green?" and Faraj captures DMs
+- **THEN** Faraj gets a card "Ting messaged you directly", and after Delegate and Post the answer appears in that DM from Faraj's account
