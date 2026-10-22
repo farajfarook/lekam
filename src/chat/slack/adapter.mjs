@@ -22,9 +22,9 @@ export async function classifyEvent(ev, { botUserId, ownerIds, isEngaged }) {
   const thread_ts = ev.thread_ts ?? ev.ts;
   const base = { channel, ts, thread_ts, user: ev.user, event_ts: ev.event_ts, raw_text: text, text: stripMentions(text), is_dm: ev.channel_type === 'im' };
   if (!base.text) return null;
-  if (mentions(text, botUserId) || base.is_dm) return { kind: 'bot_mention', ...base };
-  // Someone tags an owner. An owner tagging themselves counts too ("@Faraj what did the team do today").
-  const owner = mentions(text, ev.user) && ownerIds.has(ev.user) ? ev.user : [...ownerIds].find((id) => id !== ev.user && mentions(text, id));
+  // An owner tagging themselves ("@Faraj what did the team do today") is the owner asking Lekam: same as tagging Lekam.
+  if (mentions(text, botUserId) || base.is_dm || (ownerIds.has(ev.user) && mentions(text, ev.user))) return { kind: 'bot_mention', ...base };
+  const owner = [...ownerIds].find((id) => id !== ev.user && mentions(text, id));
   if (owner) return { kind: 'owner_mention', owner, ...base };
   if (ev.thread_ts && (await isEngaged(channel, ev.thread_ts))) return { kind: 'followup', ...base };
   return null;

@@ -31,8 +31,9 @@ export function readSkills(dirs, { log = () => {} } = {}) {
   return skills.filter((s) => !s.hidden).sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export function renderCatalogue({ skills, repos, outward_actions, override = null, maxChars = 16000, log = () => {} }) {
+export function renderCatalogue({ skills, repos, outward_actions, agent_tools = [], override = null, maxChars = 16000, log = () => {} }) {
   const parts = [];
+  if (agent_tools.length) parts.push('## Live data agents can reach (questions about these are actionable)\n' + agent_tools.map((t) => `- ${t}`).join('\n') + '\n');
   parts.push('## Outward actions (ids the owner approves per request)');
   const ids = Object.keys(outward_actions);
   parts.push(ids.length ? ids.map((k) => `- ${k}: ${outward_actions[k]}`).join('\n') : '- (none configured)');
@@ -48,6 +49,6 @@ export function renderCatalogue({ skills, repos, outward_actions, override = nul
 
 export function buildCatalogue(config, { log } = {}) {
   const skills = readSkills(config.skills_dirs, { log });
-  const text = renderCatalogue({ skills, repos: config.repos, outward_actions: config.outward_actions, override: config.catalogue_override, maxChars: config.brain.catalogue_max_chars, log });
+  const text = renderCatalogue({ skills, repos: config.repos, outward_actions: config.outward_actions, agent_tools: config.agent_tools ?? [], override: config.catalogue_override, maxChars: config.brain.catalogue_max_chars, log });
   return { skills, text, skillByName: new Map(skills.map((s) => [s.name, s])) };
 }

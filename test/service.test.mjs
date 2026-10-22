@@ -194,16 +194,17 @@ test('results always wait for the owner; the card has no auto-post option', asyn
   assert.ok(JSON.stringify(h.chat.lastDm().blocks).includes(ACTIONS.POST_RESULT));
 });
 
-test('owner tagging themselves with a tool question gets a card; no ack in the thread after Delegate', async () => {
-  const h = await harness({ brainScript: () => cls({ intent: 'question', actionable: true, reply_to_user: null, brief: { summary: "Summarise what the team did today and report back", skill: null, repo: null, outward_actions: [], notes: '' } }) });
-  const m = await h.chat.inject({ kind: 'owner_mention', owner: OWNER, channel: CHAN, user: OWNER, text: 'what did your team do today' });
-  assert.equal(h.chat.posts.length, 0);
+test('owner asking Lekam (self-tag or @Lekam): low confidence still cards, no "I\'ve asked Faraj" to Faraj, result posts as Lekam', async () => {
+  const h = await harness({ brainScript: () => cls({ intent: 'question', actionable: true, confidence: 0.4, reply_to_user: "I've asked Faraj; I'll post back here.", brief: { summary: 'Check leave plans for the next 4 months and report back', skill: null, repo: null, outward_actions: [], notes: '' } }), execScript: { start: 'Nobody on leave.' } });
+  h.chat.postAs = new Set([OWNER]);
+  const m = await h.chat.inject({ kind: 'bot_mention', channel: CHAN, user: OWNER, text: 'any leave plans for next 4 months?' });
   const req = h.store.findByThread(CHAN, m.thread_ts);
   assert.equal(req.state, 'PENDING_APPROVAL');
-  await h.chat.click(ACTIONS.DELEGATE, req.id, OWNER, h.chat.dms[0]);
-  await tick();
   assert.equal(h.chat.posts.length, 0);
-  assert.equal(h.store.getRequest(req.id).state, 'DONE');
+  assert.ok(JSON.stringify(h.chat.dms[0].blocks).includes('unsure this is a request'));
+  await h.chat.click(ACTIONS.APPROVE_TASK, req.id, OWNER, h.chat.dms[0]); await tick();
+  await h.chat.click(ACTIONS.POST_RESULT, req.id, OWNER, h.chat.lastDm());
+  assert.deepEqual([h.chat.posts.at(-1).text, h.chat.posts.at(-1).as], ['Nobody on leave.', null]);
 });
 
 test('owner-tag replies post as the owner when a user token is set; Lekam-tag replies post as Lekam', async () => {

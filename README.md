@@ -26,8 +26,8 @@ Slack ──Socket Mode──▶ lekam ──▶ brain (LLM, JSON only, no tools
 
 | Someone… | Lekam… |
 |---|---|
-| mentions `@Lekam` with a task | reacts 👀, sends the owner a card (verbatim request, proposed brief, skill, repo, outward-action checkboxes). Buttons: Approve task · Approve once · Discuss first · Edit brief · Decline |
-| tags **the owner** with a task or a question that needs tools ("what did your team do today?"); the owner can tag themselves to ask Lekam | stays silent in the channel; DMs the owner: Delegate · Delegate (no outward actions) · Discuss first · Edit brief · Ignore. Only after Delegate does it speak in the thread |
+| mentions `@Lekam` with a task or a question that needs live data (the owner tagging themselves counts as this) | reacts 👀, sends the owner a card (verbatim request, proposed brief, skill, repo, outward-action checkboxes). Buttons: Approve task · Approve once · Discuss first · Edit brief · Decline |
+| tags **the owner** with a task or a question that needs tools ("what did your team do today?") | stays silent in the channel; DMs the owner: Delegate · Delegate (no outward actions) · Discuss first · Edit brief · Ignore. Only after Delegate does it speak in the thread |
 | replies in a thread Lekam is working on | forwards in-scope follow-ups to the same agent session; cards scope changes |
 | asks something that needs no agent | answers briefly in persona, or stays quiet |
 
@@ -75,6 +75,7 @@ Everything personal lives in `lekam.yml`, `persona.md` (the bot's voice) and `gu
 - `brain` — endpoint, models (`classify_model`, optional stronger `brief_model`), `threshold` (owner-mentions below it never card), context sizes.
 - `approvals` — TTLs per kind (expiry = deny), `force_card_patterns`, `outward_actions_mode`.
 - `outward_actions` — the ids the brain may propose and you approve per request.
+- `agent_tools` — plain-text list of live data sources your agents can reach (HR, Jira, CI…). Without it the brain may shrug at questions like "any leave plans?" instead of carding them.
 - `repos`, `skills_dirs` — the catalogue the brain sees. Skills are read from `*/SKILL.md` frontmatter (`name`, `description`, optional `lekam_outward_actions`). A `catalogue_file` can replace the auto-generated skills section.
 
 ## CLI

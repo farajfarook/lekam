@@ -35,6 +35,7 @@ const DEFAULTS = {
   outward_actions: {},
   repos: [],
   skills_dirs: [],
+  agent_tools: [],
 };
 
 const EXEC_DEFAULTS = { type: 'paseo', paseo_url: 'ws://127.0.0.1:6767/ws', provider: null, max_concurrent: 2, run_timeout: '45m', idle_archive_days: 7 };
@@ -64,6 +65,7 @@ export function resolveConfig(raw, { baseDir = process.cwd(), envLookup = env } 
     if (!r?.name) throw new ConfigError('repos[]: each repo needs a name');
     return { name: r.name, url: r.url ?? null, default_branch: r.default_branch ?? 'main', notes: r.notes ?? '' };
   });
+  c.agent_tools = (raw.agent_tools ?? []).map(String);
   c.skills_dirs = (raw.skills_dirs ?? []).map((d) => path.resolve(baseDir, expandHome(d)));
 
   c.chat.thread_engagement_ms = parseDuration(c.chat.thread_engagement, 'chat.thread_engagement');

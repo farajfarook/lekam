@@ -15,7 +15,7 @@ test('owner mention, including the owner tagging themselves', async () => {
   const m = await classifyEvent({ type: 'message', user: 'U1', channel: 'C', ts: '1', text: '<@UOWN> look' }, ctx());
   assert.equal(m.kind, 'owner_mention'); assert.equal(m.owner, 'UOWN'); assert.equal(m.text, 'look');
   const self = await classifyEvent({ type: 'message', user: 'UOWN', channel: 'C', ts: '1', text: '<@UOWN> what did your team do today' }, ctx());
-  assert.equal(self.kind, 'owner_mention'); assert.equal(self.owner, 'UOWN'); assert.equal(self.text, 'what did your team do today');
+  assert.equal(self.kind, 'bot_mention', 'owner tagging themselves = asking Lekam'); assert.equal(self.text, 'what did your team do today');
   assert.equal(await classifyEvent({ type: 'message', user: 'UOWN', channel: 'C', ts: '1', text: 'no tag here' }, ctx()), null);
 });
 test('followups only in engaged threads', async () => {

@@ -180,7 +180,8 @@ export class Service {
     request = this.store.updateRequest(request.id, { card });
     if (msg.kind === 'bot_mention') {
       await this.react(request, 'pending');
-      if (cls.reply_to_user && !ownDm) await this.post(msg.channel, msg.thread_ts, cls.reply_to_user);
+      // "I've asked Faraj" is for other people; the owner asking gets the 👀 and the card.
+      if (cls.reply_to_user && msg.user !== owner.slack_id) await this.post(msg.channel, msg.thread_ts, cls.reply_to_user);
     }
   }
 

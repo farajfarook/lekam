@@ -66,6 +66,11 @@ repos:
     notes: .NET API (api/) + React (ui/)
 
 # Directories scanned for */SKILL.md to build the brain's catalogue.
+# Optional: live data sources your agents can reach. Questions about these become cards instead of "I can't".
+agent_tools:
+  - "Jira: tickets, sprints"
+  - "GitHub: PRs, CI checks"
+
 skills_dirs:
   - ~/.agents/skills
 
