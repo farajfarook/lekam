@@ -94,3 +94,5 @@ owners:
       max_concurrent: 2
       run_timeout: 45m
       idle_archive_days: 7
+      # workspace_label: Lekam            # Paseo label for Lekam's sessions; reused if it exists, else created
+      # workspace_label_color: amber       # violet sky emerald orange pink indigo teal red amber blue

@@ -71,7 +71,7 @@ As a service: `config/lekam.service` (systemd user unit). Without a login sessio
 
 Everything personal lives in `lekam.yml`, `persona.md` (the bot's voice) and `guardrails.md` (rules prepended to every agent brief). `*_env` keys name environment variables; the loader never logs their values.
 
-- `owners[]` — one or more. Each has a Slack id, the channels it is default for, and its own executor (`paseo_url`, `provider/model`, `cwd`, `max_concurrent`, `run_timeout`).
+- `owners[]` — one or more. Each has a Slack id, the channels it is default for, and its own executor (`paseo_url`, `provider/model`, `cwd`, `max_concurrent`, `run_timeout`, `workspace_label`). Every session Lekam creates is put under the Paseo workspace label `workspace_label` (default `Lekam`): an existing label with that name is reused with its colour, otherwise it is created (`workspace_label_color`, default amber). Set `workspace_label: null` to turn it off.
 - `brain` — endpoint, models (`classify_model`, optional stronger `brief_model`), `threshold` (owner-mentions below it never card), context sizes.
 - `approvals` — TTLs per kind (expiry = deny), `force_card_patterns`, `outward_actions_mode`.
 - `outward_actions` — the ids the brain may propose and you approve per request.

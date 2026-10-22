@@ -79,3 +79,10 @@ Sessions whose request has been DONE/RELEASED for more than `executor.idle_archi
 - **WHEN** a request has been RELEASED for more than `idle_archive_days`
 - **THEN** the daily sweep archives its session and records `session_archived`
 
+
+### Requirement: Paseo workspace label
+Every agent Lekam creates SHALL have its workspace assigned the Paseo workspace label named by `executor.workspace_label` (default `Lekam`). If a label with that name exists (case-insensitive) it SHALL be reused with its name and colour; otherwise it is created with `executor.workspace_label_color` (default amber). Labelling failures SHALL be logged and SHALL NOT affect the run. `workspace_label: null` disables it.
+
+#### Scenario: label reused
+- **WHEN** the daemon already has a label "Lekam" (amber) and Lekam creates an agent
+- **THEN** the agent's workspace is assigned "Lekam" and no second label is created

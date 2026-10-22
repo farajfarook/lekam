@@ -17,8 +17,14 @@ class Semaphore {
 
 export class PaseoExecutor {
   /** @param {object} o owner.executor + { config, log, createClient? } */
-  constructor({ paseo_url, provider, cwd, max_concurrent = 2, run_timeout_ms = 45 * 60e3, config, log = () => {}, createClient = null }) {
-    Object.assign(this, { paseo_url, provider, cwd, run_timeout_ms, config, log });
+  constructor({ paseo_url, provider, cwd, max_concurrent = 2, run_timeout_ms = 45 * 60e3, workspace_label = 'Lekam', workspace_label_color = 'amber', config, log = () => {}, createClient = null, createLabelClient = null }) {
+    Object.assign(this, { paseo_url, provider, cwd, run_timeout_ms, workspace_label, workspace_label_color, config, log });
+    // Workspace labels live on the low-level daemon client; the SDK facade doesn't expose them.
+    this.createLabelClient = createLabelClient ?? (async () => {
+      const { DaemonClient } = await import('@getpaseo/client/internal/daemon-client');
+      return new DaemonClient({ url: paseo_url, clientId: `lekam-labels-${process.pid}`, clientType: 'cli' });
+    });
+    this.labelClient = null;
     this.sem = new Semaphore(max_concurrent);
     this.createClient = createClient ?? (async () => { const { createPaseoClient } = await import('@getpaseo/client'); return createPaseoClient({ url: paseo_url }); });
     this.client = null; this.handles = new Map();
@@ -30,7 +36,30 @@ export class PaseoExecutor {
     await this.client.connect();
     return this.client;
   }
-  async close() { try { await this.client?.close(); } catch {} this.client = null; }
+  async close() {
+    try { await this.client?.close(); } catch {} this.client = null;
+    try { await this.labelClient?.close(); } catch {} this.labelClient = null;
+  }
+
+  /**
+   * Put the agent's workspace under the "Lekam" label in Paseo. Reuses an existing label with that name
+   * (any case, keeping its colour); otherwise the daemon creates it. Never fails the run.
+   */
+  async labelWorkspace(handle) {
+    if (!this.workspace_label) return;
+    try {
+      const workspaceId = handle.workspaceId ?? handle.current?.()?.workspaceId ?? (await handle.refresh?.())?.agent?.workspaceId;
+      if (!workspaceId) { this.log('warn', `no workspace id for agent ${handle.id}; not labelled`); return; }
+      if (!this.labelClient) { this.labelClient = await this.createLabelClient(); await this.labelClient.connect(); }
+      const want = this.workspace_label.replace(/\s+/g, ' ').trim();
+      const existing = ((await this.labelClient.listWorkspaceLabels())?.labels ?? []).find((l) => l.name.toLowerCase() === want.toLowerCase());
+      const label = existing ? { name: existing.name, color: existing.color } : { name: want, color: this.workspace_label_color };
+      await this.labelClient.setWorkspaceLabel({ workspaceId, label, assigned: true });
+    } catch (e) {
+      this.log('warn', `labelling workspace for agent ${handle.id} failed: ${e.message}`);
+      try { await this.labelClient?.close(); } catch {} this.labelClient = null; // reconnect next time
+    }
+  }
 
   /** Used by `lekam check`: daemon reachable and provider available. */
   async check() {
@@ -58,6 +87,7 @@ export class PaseoExecutor {
     fs.mkdirSync(this.cwd, { recursive: true }); // Paseo removes a workspace directory when its last agent is archived
     const h = await this.client.agents.create({ config: { provider: this.provider }, cwd: this.cwd, title: title?.slice(0, 80), labels: this.labelsFor(request), prompt });
     this.handles.set(request.id, h);
+    await this.labelWorkspace(h);
     return h;
   }
 

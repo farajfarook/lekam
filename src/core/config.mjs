@@ -38,7 +38,7 @@ const DEFAULTS = {
   agent_tools: [],
 };
 
-const EXEC_DEFAULTS = { type: 'paseo', paseo_url: 'ws://127.0.0.1:6767/ws', provider: null, max_concurrent: 2, run_timeout: '45m', idle_archive_days: 7 };
+const EXEC_DEFAULTS = { type: 'paseo', paseo_url: 'ws://127.0.0.1:6767/ws', provider: null, max_concurrent: 2, run_timeout: '45m', idle_archive_days: 7, workspace_label: 'Lekam', workspace_label_color: 'amber' };
 
 function readText(file, baseDir, what) {
   if (!file) return '';
