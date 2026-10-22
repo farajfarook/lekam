@@ -2,8 +2,10 @@ export function ttlFor(kind, config) {
   return kind === 'owner_mention' ? config.approvals.ttl_owner_mention_ms : config.approvals.ttl_bot_mention_ms;
 }
 
+/** Per-requester hourly limit on new messages. Owners are never limited (the limit protects them from others). */
 export function rateLimited(store, requester, config) {
-  return store.rateHit(requester) > config.limits.per_user_per_hour;
+  if (config.ownerIds.has(requester)) return false;
+  return store.rateHit(requester, { limit: config.limits.per_user_per_hour }) > config.limits.per_user_per_hour;
 }
 
 export function ownerOverloaded(store, owner, config) {

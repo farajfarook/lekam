@@ -160,9 +160,12 @@ export class Store {
   }
 
   // ---- rate ----
-  rateHit(requester, { now = Date.now() } = {}) {
+  /** Record a message and return the count in the last hour. Once over `limit`, refused messages are not recorded, so the window drains. */
+  rateHit(requester, { now = Date.now(), limit = Infinity } = {}) {
+    const n = this.db.prepare(`SELECT COUNT(*) AS n FROM rate WHERE requester=? AND at>?`).get(requester, now - 36e5).n;
+    if (n >= limit) return n + 1;
     this.db.prepare(`INSERT INTO rate(requester,at) VALUES(?,?)`).run(requester, now);
-    return this.db.prepare(`SELECT COUNT(*) AS n FROM rate WHERE requester=? AND at>?`).get(requester, now - 36e5).n;
+    return n + 1;
   }
 
   // ---- audit ----

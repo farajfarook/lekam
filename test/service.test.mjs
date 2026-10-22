@@ -337,3 +337,10 @@ test('owner DMs Lekam: card, result and replies thread under the owner\'s own me
   assert.deepEqual([h.chat.lastDm().text, h.chat.lastDm().thread_ts], ['More.', m.ts]);
   assert.equal(h.store.listByState('PENDING_APPROVAL').length, 0, 'thread reply did not open a new request');
 });
+
+test('owners are never rate limited', async () => {
+  const h = await harness({ brainScript: () => cls({ intent: 'chitchat', reply_to_user: 'Hi.', brief: null }) });
+  for (let i = 0; i < 15; i++) await h.chat.inject({ kind: 'bot_mention', channel: CHAN, user: OWNER, text: `hello ${i}` });
+  assert.ok(!h.chat.posts.some((p) => /a lot my way/.test(p.text)));
+  assert.ok(!h.store.auditTail(50).some((r) => r.type === 'rate_limited'));
+});
