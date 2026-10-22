@@ -6,11 +6,11 @@ The approval gate is the product's security boundary. It presents the owner with
 ## ADDED Requirements
 
 ### Requirement: Card contents
-An approval card SHALL show: requester (name + id), channel and a permalink to the thread, the verbatim request text (quoted, unmodified), the proposed brief (summary, skill, repo), the outward actions as checkboxes (pre-ticked from the brief), urgency flag, confidence (and "low confidence" label when below threshold), and the request id.
+An approval card SHALL be short enough to read at a glance: one header line with the requester's name and the channel name linked to the original message, the verbatim request text (quoted, unmodified), at most two earlier thread messages when the request refers back, one **Plan** line (the brief summary, plus skill/repo when set), the outward actions as checkboxes only in `ask` mode when some are proposed, an urgent / "unsure this is a request" flag only when it applies, and the buttons. Notes, confidence and the request id SHALL NOT be shown on the card (notes are visible in Edit brief; the rest is in the audit log). The card DM SHALL NOT unfurl links, so the original message is not shown twice.
 
 #### Scenario: card contents
 - **WHEN** the brain proposes a brief for a request whose text is `fix the export <script>`
-- **THEN** the card shows that exact text in a quote block, unmodified, with the brief and outward-action checkboxes beneath it
+- **THEN** the card shows that exact text in a quote block, unmodified, with the Plan line beneath it
 
 ### Requirement: Actions
 A card for a `bot_mention` SHALL offer: **Approve task**, **Approve once**, **Discuss first**, **Edit brief**, **Decline**. A card for an `owner_mention` SHALL offer: **Delegate**, **Delegate (no outward actions)**, **Discuss first**, **Edit brief**, **Ignore**.
@@ -73,7 +73,14 @@ Decline (bot_mention) SHALL post one short line in the thread and set 🚫. Igno
 - **THEN** the stored brief reflects both edits and the re-rendered card shows them
 
 ### Requirement: Result release
-When a session finishes, the owner SHALL receive a DM with the final report and **Post to thread** / **Discard**. Nothing is posted to the thread without that second owner action; there is no auto-post option.
+When a session finishes, the owner SHALL receive a DM with the final report, a link to the original thread and **Post to thread** / **Discard**. Nothing is posted to the thread without that second owner action; there is no auto-post option.
+
+### Requirement: Who speaks in the thread
+Replies on a `bot_mention` SHALL be posted as Lekam. Owner-approved posts on an `owner_mention` (the pickup line and the released result) SHALL be posted as the owner when `owners[].user_token_env` names a valid Slack user token (user scope `chat:write`) belonging to that owner, and as Lekam otherwise; the result button then reads **Post to thread as <owner>**. Lekam's own automatic replies (persona answers, rate-limit and failure lines) SHALL always post as Lekam. Messages posted as the owner SHALL NOT be read back as the owner talking. When the owner tagged themselves, no pickup line is posted.
+
+#### Scenario: owner tag answered as the owner
+- **WHEN** Ting tags the owner, the owner delegates and later presses Post to thread, and a user token is configured
+- **THEN** both "Looking into this, I'll reply here." and the report appear in the thread from the owner's account, and neither is forwarded to the agent as an owner follow-up
 
 #### Scenario: result release
 - **WHEN** a session finishes

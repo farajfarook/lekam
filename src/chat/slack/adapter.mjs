@@ -31,9 +31,11 @@ export async function classifyEvent(ev, { botUserId, ownerIds, isEngaged }) {
 }
 
 export class SlackAdapter {
-  constructor({ bot_token, app_token, ownerIds, log = () => {} }) {
+  constructor({ bot_token, app_token, ownerIds, userTokens = new Map(), log = () => {} }) {
     this.ownerIds = ownerIds; this.log = log; this.botUserId = null;
     this.tokens = { bot_token, app_token };
+    this.userTokens = userTokens; this.userClients = new Map(); // owner id -> WebClient posting as that owner
+    this.echoes = []; // messages we posted as an owner; their message events must not come back in as the owner talking
     this.handlers = { message: null, action: null, view: null, isEngaged: () => false };
     this.userNames = new Map(); this.channelNames = new Map();
   }
@@ -49,10 +51,21 @@ export class SlackAdapter {
     this.client = this.app.client;
     const auth = await this.client.auth.test();
     this.botUserId = auth.user_id;
+    if (this.userTokens.size) {
+      const { WebClient } = await import('@slack/web-api');
+      for (const [id, token] of this.userTokens) {
+        try {
+          const c = new WebClient(token); const a = await c.auth.test();
+          if (a.user_id !== id) { this.log('warn', `user token for ${id} belongs to ${a.user_id}; ignoring it`); continue; }
+          this.userClients.set(id, c); this.log('info', `can post as ${a.user} (${id})`);
+        } catch (e) { this.log('warn', `user token for ${id} failed: ${e.message}`); }
+      }
+    }
     const seen = new Set(); // app_mention and message.* both fire for a mention; collapse on ts
     const handle = async (ev, event_id) => {
       const key = `${ev.channel}:${ev.ts}`;
       if (seen.has(key)) return; seen.add(key); setTimeout(() => seen.delete(key), 60_000);
+      if (this.isEcho(ev)) return;
       const msg = await classifyEvent(ev, { botUserId: this.botUserId, ownerIds: this.ownerIds, isEngaged: this.handlers.isEngaged });
       if (!msg) return;
       msg.event_id = event_id;
@@ -88,15 +101,31 @@ export class SlackAdapter {
   // ---- surface used by core ----
   async react(channel, ts, name) { try { await this.client.reactions.add({ channel, timestamp: ts, name }); } catch (e) { if (!/already_reacted/.test(e.message)) this.log('warn', `react failed: ${e.message}`); } }
   async unreact(channel, ts, name) { try { await this.client.reactions.remove({ channel, timestamp: ts, name }); } catch (e) { if (!/no_reaction/.test(e.message)) this.log('warn', `unreact failed: ${e.message}`); } }
-  async post(channel, thread_ts, msg) {
+  canPostAs(user) { return this.userClients.has(user); }
+  /** Post in a thread; `as` = an owner id with a user token posts as that owner instead of Lekam. */
+  async post(channel, thread_ts, msg, { as = null } = {}) {
     const m = outgoing(msg);
-    const r = await this.client.chat.postMessage({ channel, thread_ts, ...m });
-    return { channel: r.channel, ts: r.ts };
+    const client = (as && this.userClients.get(as)) || null;
+    if (!client) { const r = await this.client.chat.postMessage({ channel, thread_ts, ...m }); return { channel: r.channel, ts: r.ts }; }
+    const echo = { channel, user: as, norm: normText(m.text), ts: null, until: Date.now() + 120_000 };
+    this.echoes.push(echo); // registered before the call: the event can beat the HTTP response
+    const r = await client.chat.postMessage({ channel, thread_ts, ...m });
+    echo.ts = r.ts;
+    return { channel: r.channel, ts: r.ts, as };
+  }
+  isEcho(ev) {
+    const now = Date.now();
+    this.echoes = this.echoes.filter((e) => e.until > now);
+    const i = this.echoes.findIndex((e) => e.channel === ev.channel && e.user === ev.user && (e.ts === ev.ts || e.norm === normText(ev.text)));
+    if (i < 0) return false;
+    this.echoes.splice(i, 1);
+    return true;
   }
   async dm(user, msg, thread_ts = undefined) {
     const conv = await this.client.conversations.open({ users: user });
     const m = outgoing(msg);
-    const r = await this.client.chat.postMessage({ channel: conv.channel.id, ...(thread_ts ? { thread_ts } : {}), ...m });
+    // No unfurls: the card's own link would otherwise expand into a second copy of the request.
+    const r = await this.client.chat.postMessage({ channel: conv.channel.id, ...(thread_ts ? { thread_ts } : {}), unfurl_links: false, unfurl_media: false, ...m });
     return { channel: r.channel, ts: r.ts };
   }
   async update(channel, ts, msg) {
@@ -121,6 +150,11 @@ export class SlackAdapter {
     if (this.channelNames.has(id)) return this.channelNames.get(id);
     try { const c = await this.client.conversations.info({ channel: id }); const n = c.channel?.name ?? null; this.channelNames.set(id, n); return n; } catch { return null; }
   }
+}
+
+/** Pure: comparable form of a message text (Slack escapes &<> and may reflow whitespace). */
+export function normText(s = '') {
+  return String(s).replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 300);
 }
 
 /** Normalise an outgoing message: strings and section mrkdwn text get Markdown -> mrkdwn conversion. */

@@ -27,7 +27,7 @@ async function buildExecutors(config) {
 }
 
 async function buildChat(config) {
-  if (config.chat.platform === 'slack') { const { SlackAdapter } = await import('./chat/slack/adapter.mjs'); return new SlackAdapter({ bot_token: config.chat.bot_token, app_token: config.chat.app_token, ownerIds: config.ownerIds, log }); }
+  if (config.chat.platform === 'slack') { const { SlackAdapter } = await import('./chat/slack/adapter.mjs'); return new SlackAdapter({ bot_token: config.chat.bot_token, app_token: config.chat.app_token, ownerIds: config.ownerIds, userTokens: new Map(config.owners.filter((o) => o.user_token).map((o) => [o.slack_id, o.user_token])), log }); }
   const { FakeChat } = await import('./chat/fake.mjs'); return new FakeChat({ ownerIds: config.ownerIds, log });
 }
 
@@ -59,7 +59,13 @@ async function main() {
       try { const r = await ex.check(); row(`paseo ${o.name}`, `${r.url} provider=${r.provider} cwd=${o.executor.cwd}`); } catch (e) { row(`paseo ${o.name}`, e.message, false); } finally { await ex.close(); }
     }
     if (config.chat.platform === 'slack') {
-      try { const { WebClient } = await import('@slack/web-api'); const a = await new WebClient(config.chat.bot_token).auth.test(); row('slack auth', `${a.user} in ${a.team}`); } catch (e) { row('slack auth', e.message, false); }
+      const { WebClient } = await import('@slack/web-api');
+      try { const a = await new WebClient(config.chat.bot_token).auth.test(); row('slack auth', `${a.user} in ${a.team}`); } catch (e) { row('slack auth', e.message, false); }
+      for (const o of config.owners) {
+        if (!o.user_token_env) continue;
+        if (!o.user_token) { row(`slack user token ${o.name}`, `${o.user_token_env} not set: replies post as Lekam`); continue; }
+        try { const a = await new WebClient(o.user_token).auth.test(); row(`slack user token ${o.name}`, `posts as ${a.user}`, a.user_id === o.slack_id); } catch (e) { row(`slack user token ${o.name}`, e.message, false); }
+      }
     }
     process.exit(ok ? 0 : 1);
   }

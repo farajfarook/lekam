@@ -193,7 +193,7 @@ test('results always wait for the owner; the card has no auto-post option', asyn
   assert.ok(JSON.stringify(h.chat.lastDm().blocks).includes(ACTIONS.POST_RESULT));
 });
 
-test('owner tagging themselves with a tool question gets a card, then "On it" after Delegate', async () => {
+test('owner tagging themselves with a tool question gets a card; no ack in the thread after Delegate', async () => {
   const h = await harness({ brainScript: () => cls({ intent: 'question', actionable: true, reply_to_user: null, brief: { summary: "Summarise what the team did today and report back", skill: null, repo: null, outward_actions: [], notes: '' } }) });
   const m = await h.chat.inject({ kind: 'owner_mention', owner: OWNER, channel: CHAN, user: OWNER, text: 'what did your team do today' });
   assert.equal(h.chat.posts.length, 0);
@@ -201,7 +201,27 @@ test('owner tagging themselves with a tool question gets a card, then "On it" af
   assert.equal(req.state, 'PENDING_APPROVAL');
   await h.chat.click(ACTIONS.DELEGATE, req.id, OWNER, h.chat.dms[0]);
   await tick();
-  assert.match(h.chat.posts[0].text, /^On it\./);
+  assert.equal(h.chat.posts.length, 0);
+  assert.equal(h.store.getRequest(req.id).state, 'DONE');
+});
+
+test('owner-tag replies post as the owner when a user token is set; Lekam-tag replies post as Lekam', async () => {
+  const h = await harness({ execScript: { start: 'Report.' } });
+  h.chat.postAs = new Set([OWNER]);
+  const m = await h.chat.inject({ kind: 'owner_mention', owner: OWNER, channel: CHAN, user: REQ, text: 'the export is blank again' });
+  const req = h.store.findByThread(CHAN, m.thread_ts);
+  await h.chat.click(ACTIONS.DELEGATE, req.id, OWNER, h.chat.dms[0]); await tick();
+  assert.equal(h.chat.posts[0].as, OWNER); assert.match(h.chat.posts[0].text, /Looking into this/);
+  const result = h.chat.lastDm();
+  assert.ok(JSON.stringify(result.blocks).includes('Post to thread as Faraj'));
+  await h.chat.click(ACTIONS.POST_RESULT, req.id, OWNER, result);
+  assert.deepEqual([h.chat.posts.at(-1).text, h.chat.posts.at(-1).as], ['Report.', OWNER]);
+
+  const b = await h.chat.inject({ kind: 'bot_mention', channel: CHAN, user: REQ, text: 'fix the export' });
+  const breq = h.store.findByThread(CHAN, b.thread_ts);
+  await h.chat.click(ACTIONS.APPROVE_TASK, breq.id, OWNER, h.chat.lastDm()); await tick();
+  await h.chat.click(ACTIONS.POST_RESULT, breq.id, OWNER, h.chat.lastDm());
+  assert.equal(h.chat.posts.at(-1).as, null);
 });
 
 test('untagged reply in a thread where Lekam spoke is treated as a mention', async () => {
@@ -234,7 +254,7 @@ test('card shows thread context when the trigger refers back', async () => {
   h.chat.thread(CHAN, first.thread_ts).push({ user: REQ, text: 'check open issues in owner portal', ts: '9' });
   await h.chat.inject({ kind: 'followup', channel: CHAN, thread_ts: first.thread_ts, user: REQ, text: 'check again please' });
   const s = JSON.stringify(h.chat.lastDm().blocks);
-  assert.ok(s.includes('Thread so far') && s.includes('check open issues in owner portal') && s.includes('> check again please'));
+  assert.ok(s.includes('Earlier in the thread') && s.includes('check open issues in owner portal') && s.includes('> check again please'));
 });
 
 test('brain receives display names, not ids', async () => {
@@ -251,7 +271,7 @@ test('outward_actions_mode: all grants everything and skips keyword cards; propo
   let h = await harness({ config: all, execScript: { start: 'ok', send: 'ok' } });
   let m = await h.chat.inject({ kind: 'bot_mention', channel: CHAN, user: REQ, text: 'look at this' });
   let req = h.store.findByThread(CHAN, m.thread_ts);
-  assert.ok(JSON.stringify(h.chat.dms[0].blocks).includes('any outward action'));
+  assert.ok(!JSON.stringify(h.chat.dms[0].blocks).includes('lekam_outward_select'));
   await h.chat.click(ACTIONS.APPROVE_TASK, req.id, OWNER, h.chat.dms[0]); await tick();
   assert.deepEqual(h.store.getRequest(req.id).scope.outward_actions, ['jira_comment', 'pr_create']);
   const sends = h.exec.calls.length;
@@ -260,7 +280,7 @@ test('outward_actions_mode: all grants everything and skips keyword cards; propo
   const prop = testConfig({ approvals: { outward_actions_mode: 'proposed' } });
   h = await harness({ config: prop });
   m = await h.chat.inject({ kind: 'bot_mention', channel: CHAN, user: REQ, text: 'look at this' });
-  assert.ok(JSON.stringify(h.chat.dms[0].blocks).includes('Will be allowed to'));
+  assert.ok(JSON.stringify(h.chat.dms[0].blocks).includes('May: Comment on Jira, Raise a PR'));
   req = h.store.findByThread(CHAN, m.thread_ts);
   await h.chat.click(ACTIONS.APPROVE_TASK, req.id, OWNER, h.chat.dms[0]); await tick();
   assert.deepEqual(h.store.getRequest(req.id).scope.outward_actions, ['jira_comment', 'pr_create']);

@@ -23,6 +23,8 @@ oauth_config:
       - reactions:write
       - reactions:read
       - users:read
+    user:
+      - chat:write          # optional: lets owner-approved replies to owner-tags post as the owner
 settings:
   event_subscriptions:
     bot_events:

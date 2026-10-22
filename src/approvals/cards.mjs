@@ -24,32 +24,32 @@ const btn = (text, action_id, value, style) => ({ type: 'button', text: { type: 
 const quote = (s) => s.split('\n').map((l) => '> ' + l).join('\n');
 const trunc = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
 
+// The card is deliberately short: who/where + link, the request, one plan line, buttons.
+// Notes, confidence and the request id live in Edit brief / the audit log, not on the card.
 function headerBlocks({ request, requesterName, permalink, channelName, lowConfidence, excerpt = [] }) {
-  const kind = request.kind === 'owner_mention' ? 'tagged you' : 'asked Lekam';
+  const kind = request.kind === 'owner_mention' ? (request.requester === request.owner ? 'asked' : 'tagged you') : 'asked Lekam';
+  const where = channelName ? '#' + channelName : 'a DM';
   const cls = request.classification ?? {};
-  const flags = [cls.urgent ? ':rotating_light: *urgent*' : null, lowConfidence ? ':grey_question: low confidence' : null, `confidence ${Math.round((cls.confidence ?? 0) * 100)}%`].filter(Boolean);
-  const blocks = [md(`*${requesterName ?? request.requester} ${kind} in ${channelName ? '#' + channelName : request.channel}*${permalink ? ` · <${permalink}|open thread>` : ''}`)];
-  if (excerpt.length) blocks.push(ctx('*Thread so far:*\n' + excerpt.map((m) => `${m.name}: ${trunc(m.text.replace(/\n+/g, ' '), 160)}`).join('\n')));
-  blocks.push(md(quote(trunc(request.request_text, 2500))), ctx(...flags, `req \`${request.id}\``));
+  const flags = [cls.urgent ? ':rotating_light: urgent' : null, lowConfidence ? ':grey_question: unsure this is a request' : null].filter(Boolean);
+  const head = `*${requesterName ?? request.requester}* ${kind} in ${permalink ? `<${permalink}|${where}>` : where}${flags.length ? ' · ' + flags.join(' · ') : ''}`;
+  const blocks = [md(`${head}\n${quote(trunc(request.request_text, 600))}`)];
+  if (excerpt.length) blocks.push(ctx('Earlier in the thread: ' + excerpt.slice(-2).map((m) => `${m.name}: ${trunc(m.text.replace(/\n+/g, ' '), 100)}`).join(' · ')));
   return blocks;
 }
 
 function briefBlocks({ request, config, selected }) {
   const b = request.brief ?? {};
-  const lines = [`*Brief:* ${b.summary ?? '(none)'}`];
-  if (b.skill) lines.push(`*Skill:* \`${b.skill}\``);
-  if (b.repo) lines.push(`*Repo:* \`${b.repo}\``);
-  if (b.notes) lines.push(`*Notes:* ${trunc(b.notes, 600)}`);
-  const blocks = [md(lines.join('\n'))];
+  const extras = [b.skill ? `skill \`${b.skill}\`` : null, b.repo ? `repo \`${b.repo}\`` : null].filter(Boolean);
+  const blocks = [md(`*Plan:* ${trunc(b.summary || '(none)', 300)}${extras.length ? `\n_${extras.join(' · ')}_` : ''}`)];
   const ids = Object.keys(config.outward_actions);
   const proposed = selected ?? b.outward_actions ?? [];
   const mode = config.approvals?.outward_actions_mode ?? 'ask';
   if (mode === 'all') {
-    blocks.push(ctx('_Agent may take any outward action (' + ids.map((id) => config.outward_actions[id]).join(', ') + ')._'));
+    // nothing to show: every outward action is allowed
   } else if (mode === 'proposed') {
-    blocks.push(ctx(proposed.length ? '*Will be allowed to:* ' + proposed.map((id) => config.outward_actions[id] ?? id).join(', ') + '. _Edit brief to change._' : '_No outward actions: the agent only reports back. Use *Edit brief* to allow any._'));
+    if (proposed.length) blocks.push(ctx('May: ' + proposed.map((id) => config.outward_actions[id] ?? id).join(', ')));
   } else if (ids.length && proposed.length === 0) {
-    blocks.push(ctx('_No outward actions: the agent only reports back. Use *Edit brief* to allow any._'));
+    // nothing proposed: the agent only reports back
   } else if (ids.length) {
     const options = ids.map((id) => ({ text: { type: 'plain_text', text: config.outward_actions[id] }, value: id }));
     const initial = options.filter((o) => proposed.includes(o.value));
@@ -75,7 +75,7 @@ export function approvalCard(args) {
   const { request } = args;
   return {
     text: `${args.requesterName ?? request.requester}: ${trunc(request.request_text, 120)}`,
-    blocks: [...headerBlocks(args), { type: 'divider' }, ...briefBlocks(args), buttonRow(request)],
+    blocks: [...headerBlocks(args), ...briefBlocks(args), buttonRow(request)],
   };
 }
 
@@ -84,7 +84,7 @@ export function actionedCard(args, outcomeText, extra = []) {
   const { request } = args;
   return {
     text: `${outcomeText} – ${trunc(request.request_text, 100)}`,
-    blocks: [...headerBlocks(args), { type: 'divider' }, ...briefBlocks(args), md(`*${outcomeText}* ${fmtTime()}`), ...extra],
+    blocks: [...headerBlocks(args), ...briefBlocks(args), ctx(`*${outcomeText}* ${fmtTime()}`), ...extra],
   };
 }
 
@@ -93,20 +93,21 @@ export function investigatingCard(args, { agentLink }) {
   return {
     text: `Investigating – ${trunc(request.request_text, 100)}`,
     blocks: [
-      ...headerBlocks(args), { type: 'divider' }, ...briefBlocks(args),
-      md(`*Investigating* ${fmtTime()} · ${agentLink ? `<${agentLink}|open in Paseo>` : 'session running'}\nReply in this thread to talk to the agent. Press *Proceed* when you're happy with its plan.`),
+      ...headerBlocks(args), ...briefBlocks(args),
+      ctx(`*Investigating* ${fmtTime()} · ${agentLink ? `<${agentLink}|open in Paseo>` : 'session running'} · reply in this thread to talk to the agent, then *Proceed*`),
       { type: 'actions', block_id: 'lekam_buttons', elements: [btn('Proceed', ACTIONS.PROCEED, request.id, 'primary'), btn('Edit brief', ACTIONS.EDIT, request.id), btn('Drop', ACTIONS.DROP, request.id, 'danger')] },
     ],
   };
 }
 
-export function resultCard({ request, report, agentLink }) {
+export function resultCard({ request, report, agentLink, permalink = null, postAs = null }) {
+  const ask = trunc(request.request_text.replace(/\n+/g, ' '), 80);
   return {
-    text: `Result for ${request.id}: ${trunc(report, 100)}`,
+    text: `Result: ${trunc(report, 100)}`,
     blocks: [
-      md(`*Result for req \`${request.id}\`*${agentLink ? ` · <${agentLink}|open in Paseo>` : ''}`),
+      ctx(`Result for ${permalink ? `<${permalink}|${ask}>` : ask}${agentLink ? ` · <${agentLink}|Paseo>` : ''}`),
       md(trunc(report, 2800)),
-      { type: 'actions', block_id: 'lekam_result', elements: [btn('Post to thread', ACTIONS.POST_RESULT, request.id, 'primary'), btn('Discard', ACTIONS.DISCARD_RESULT, request.id)] },
+      { type: 'actions', block_id: 'lekam_result', elements: [btn(postAs ? `Post to thread as ${postAs}` : 'Post to thread', ACTIONS.POST_RESULT, request.id, 'primary'), btn('Discard', ACTIONS.DISCARD_RESULT, request.id)] },
     ],
   };
 }

@@ -20,6 +20,7 @@ Slack ──Socket Mode──▶ lekam ──▶ brain (LLM, JSON only, no tools
 - Approval is a Block Kit button pressed by a configured owner. Text, reactions and timeouts never approve. Timeouts deny.
 - The owner approves a *scope* (brief + allowed outward actions). Follow-ups that stay in scope flow to the same agent; anything that smells like a scope change (new repo, PR, deploy, Jira, prod…) comes back as a new card.
 - Results always go to the owner first, with **Post to thread** / **Discard**. Nothing reaches the thread without that second tap.
+- Who speaks: replies when someone tagged **Lekam** come from Lekam. Replies when someone tagged **the owner** come from the owner's own account if `user_token_env` is set (see Install), else from Lekam.
 
 ## What it does
 
@@ -59,7 +60,8 @@ cp config/persona.md config/guardrails.md .     # edit to taste
    node src/cli.mjs run
    ```
 6. Invite the bot to a channel: `/invite @Lekam`. It only hears channels it's in.
-7. To DM Lekam: api.slack.com/apps → your app → **App Home** → **Show Tabs** → turn on **Messages Tab** and tick **Allow users to send Slash commands and messages from the messages tab**. Without it Slack shows "Sending messages to this app has been turned off". Restart the Slack client after changing it.
+7. Optional, reply as yourself: the manifest asks for the user scope `chat:write`. After installing, copy the **User OAuth Token** (`xoxp-…`) from *OAuth & Permissions* into an env var and name it in `owners[].user_token_env`. `lekam check` confirms whose account it posts as.
+8. To DM Lekam: api.slack.com/apps → your app → **App Home** → **Show Tabs** → turn on **Messages Tab** and tick **Allow users to send Slash commands and messages from the messages tab**. Without it Slack shows "Sending messages to this app has been turned off". Restart the Slack client after changing it.
 
 As a service: `config/lekam.service` (systemd user unit). Without a login session, run `systemctl --user` with `XDG_RUNTIME_DIR=/run/user/$(id -u)` and `DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus` set, and `loginctl enable-linger $USER` so it starts at boot.
 

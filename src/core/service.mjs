@@ -50,7 +50,14 @@ export class Service {
   }
   exec(ownerId) { const e = this.executors.get(ownerId); if (!e) throw new Error(`no executor for owner ${ownerId}`); return e; }
   ownerName(id) { return ownerById(this.config, id)?.name ?? id; }
-  pickupLine(r) { return r.requester === r.owner ? `On it. I'll post back here when there's something to see.` : `${this.ownerName(r.owner)} asked me to pick this up. I'll post back here when there's something to see.`; }
+  /** Owner-tag threads get owner-approved posts as the owner when a user token is configured; everything else posts as Lekam. */
+  postsAsOwner(r) { return r.kind === 'owner_mention' && !!this.chat.canPostAs?.(r.owner); }
+  postFor(r, msg) { return this.post(r.channel, r.thread_ts, msg, this.postsAsOwner(r) ? { as: r.owner } : {}); }
+  /** Thread ack after Delegate/Proceed on an owner tag. None when the owner tagged themselves. */
+  async ackPickup(r) {
+    if (r.kind !== 'owner_mention' || r.requester === r.owner) return;
+    await this.postFor(r, this.postsAsOwner(r) ? `Looking into this, I'll reply here.` : `${this.ownerName(r.owner)} asked me to pick this up. I'll post back here when there's something to see.`);
+  }
   react(request, key) { return this.setReaction(request, this.config.chat.reactions[key]); }
   setReaction(request, name) {
     // Serialised per message so concurrent transitions cannot interleave add/remove calls.
@@ -69,7 +76,7 @@ export class Service {
     return { request, config: this.config, excerpt, requesterName: await this.chat.userName(request.requester), permalink: await this.chat.permalink(request.channel, request.origin_ts), channelName: await this.chat.channelName(request.channel), lowConfidence: (request.classification?.confidence ?? 1) < this.config.brain.threshold };
   }
   /** Post in a channel thread and remember that Lekam spoke there (keeps the thread engaged). */
-  async post(channel, thread_ts, msg) { const r = await this.chat.post(channel, thread_ts, msg); this.store.touchThread(channel, thread_ts); return r; }
+  async post(channel, thread_ts, msg, opts = {}) { const r = await this.chat.post(channel, thread_ts, msg, opts); this.store.touchThread(channel, thread_ts); return r; }
   async updateCard(request, msg) { if (request.card) await this.chat.update(request.card.channel, request.card.ts, msg); }
   async classify(msg, { request = null, ownerId, thread = null } = {}) {
     try {
@@ -239,7 +246,7 @@ export class Service {
           this.store.updateRequest(id, { scope, approval_mode: mode });
           this.store.transition(id, 'APPROVED', { actor: a.user, data: { mode, outward } });
           await this.updateCard(request, actionedCard(await args(), mode === 'once' ? 'Approved once' : request.kind === 'owner_mention' ? 'Delegated' : 'Approved task'));
-          if (request.kind === 'owner_mention') await this.post(request.channel, request.thread_ts, this.pickupLine(request));
+          await this.ackPickup(request);
           return this.run(this.store.getRequest(id));
         }
         case ACTIONS.DISCUSS: {
@@ -262,7 +269,7 @@ export class Service {
           this.store.updateRequest(id, { scope: { brief: request.brief, outward_actions: outward }, approval_mode: 'task' });
           this.store.transition(id, 'RUNNING', { actor: a.user, data: { outward } });
           await this.updateCard(request, actionedCard(await args(), 'Proceeding'));
-          if (request.kind === 'owner_mention') await this.post(request.channel, request.thread_ts, this.pickupLine(request));
+          await this.ackPickup(request);
           await this.react(request, 'running');
           const exec = this.exec(request.owner);
           const { result } = await exec.proceed({ request: this.store.getRequest(id), brief: request.brief, allowed: outward, onQueued: (n) => this.updateCard(request, actionedCard(args, `Queued (${n} ahead)`)).catch(() => {}) });
@@ -276,15 +283,17 @@ export class Service {
         }
         case ACTIONS.POST_RESULT: {
           this.store.transition(id, 'RELEASED', { actor: a.user });
-          await this.post(request.channel, request.thread_ts, request.outcome?.text || '(no report)');
+          const posted = await this.postFor(request, request.outcome?.text || '(no report)');
           await this.react(request, 'done');
-          await this.chat.update(a.channel, a.message_ts, { text: `Posted ${fmtTime()}`, blocks: [{ type: 'section', text: { type: 'mrkdwn', text: `*Posted to thread* ${fmtTime()} · req \`${id}\`` } }] });
+          const link = await this.chat.permalink(request.channel, posted?.ts ?? request.origin_ts);
+          const done = `*Posted${posted?.as ? ` as ${this.ownerName(request.owner)}` : ''}* ${fmtTime()}${link ? ` · <${link}|view>` : ''}`;
+          await this.chat.update(a.channel, a.message_ts, { text: `Posted ${fmtTime()}`, blocks: [{ type: 'section', text: { type: 'mrkdwn', text: `${done}\n${(request.outcome?.text || '').slice(0, 2800)}` } }] });
           return;
         }
         case ACTIONS.DISCARD_RESULT: {
           this.store.transition(id, 'DISCARDED', { actor: a.user });
           await this.react(request, 'done');
-          await this.chat.update(a.channel, a.message_ts, { text: `Discarded ${fmtTime()}`, blocks: [{ type: 'section', text: { type: 'mrkdwn', text: `*Discarded* ${fmtTime()} · req \`${id}\`` } }] });
+          await this.chat.update(a.channel, a.message_ts, { text: `Discarded ${fmtTime()}`, blocks: [{ type: 'section', text: { type: 'mrkdwn', text: `*Discarded* ${fmtTime()}` } }] });
           return;
         }
       }
@@ -347,7 +356,7 @@ export class Service {
     if (r.state === 'RUNNING') this.store.transition(r.id, 'DONE');
     // Results always wait for the owner: Post to thread / Discard.
     const link = this.exec(r.owner).agentLink(r.session_id);
-    await this.chat.dm(r.owner, resultCard({ request: r, report: outcome.text || '(no report)', agentLink: link }));
+    await this.chat.dm(r.owner, resultCard({ request: r, report: outcome.text || '(no report)', agentLink: link, permalink: await this.chat.permalink(r.channel, r.origin_ts), postAs: this.postsAsOwner(r) ? this.ownerName(r.owner) : null }));
     if (!followup) await this.updateCard(r, actionedCard(await this.cardArgs(r), 'Finished, result sent to you'));
   }
 

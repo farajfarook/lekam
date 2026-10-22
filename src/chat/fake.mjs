@@ -19,7 +19,8 @@ export class FakeChat {
   async react(channel, ts, name) { const k = `${channel}:${ts}`; if (!this.reactions.has(k)) this.reactions.set(k, new Set()); this.reactions.get(k).add(name); }
   async unreact(channel, ts, name) { this.reactions.get(`${channel}:${ts}`)?.delete(name); }
   reactionsOn(channel, ts) { return [...(this.reactions.get(`${channel}:${ts}`) ?? [])]; }
-  async post(channel, thread_ts, msg) { const m = typeof msg === 'string' ? { text: msg } : msg; const ts = this.ts(); this.posts.push({ channel, thread_ts, ...m, ts }); this.thread(channel, thread_ts).push({ user: this.botUserId, text: m.text, ts }); return { channel, ts }; }
+  canPostAs(user) { return this.postAs?.has(user) ?? false; }
+  async post(channel, thread_ts, msg, { as = null } = {}) { const m = typeof msg === 'string' ? { text: msg } : msg; const ts = this.ts(); this.posts.push({ channel, thread_ts, ...m, ts, as: as && this.canPostAs(as) ? as : null }); this.thread(channel, thread_ts).push({ user: this.botUserId, text: m.text, ts }); return { channel, ts }; }
   async dm(user, msg, thread_ts) { const m = typeof msg === 'string' ? { text: msg } : msg; const ts = this.ts(); const d = { user, channel: `DM_${user}`, ts, thread_ts: thread_ts ?? null, ...m }; this.dms.push(d); return { channel: d.channel, ts }; }
   async update(channel, ts, msg) { const m = typeof msg === 'string' ? { text: msg } : msg; this.updates.push({ channel, ts, ...m }); }
   async ephemeral(channel, user, text) { this.ephemerals.push({ channel, user, text }); }

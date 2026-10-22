@@ -21,6 +21,13 @@ test('investigate, proceed, handoff', () => {
   assert.ok(proceedPrompt({ brief, allowed: ['pr_create'], config }).includes('pr_create (Raise a PR)'));
   assert.ok(handoffPrompt({ config, request, brief, allowed: [], previousOutcome: { text: 'OLD REPORT' } }).includes('<previous-report>\nOLD REPORT'));
 });
+test('approval card is short: linked header, quote, one plan line, buttons; no notes/confidence/req id', () => {
+  const c = approvalCard({ request: { ...request, brief: { ...brief, notes: 'SECRET NOTE' } }, config, requesterName: 'Ting', permalink: 'https://x', channelName: 'team', lowConfidence: false });
+  const s = JSON.stringify(c.blocks);
+  assert.ok(s.includes('<https://x|#team>') && s.includes('*Plan:* Fix export'));
+  for (const bad of ['SECRET NOTE', 'confidence', 'req `r1`', 'divider']) assert.ok(!s.includes(bad), bad);
+  assert.ok(c.blocks.length <= 4, `blocks: ${c.blocks.length}`);
+});
 test('approval card quotes verbatim and carries action ids', () => {
   const c = approvalCard({ request, config, requesterName: 'Ting', permalink: 'https://x', channelName: 'team', lowConfidence: false });
   const s = JSON.stringify(c.blocks);
@@ -35,7 +42,7 @@ test('briefFromView', () => {
 test('outward checkboxes only appear when the brief proposes some', () => {
   const none = approvalCard({ request: { ...request, brief: { summary: 's', outward_actions: [] } }, config, requesterName: 'T' });
   assert.ok(!JSON.stringify(none.blocks).includes('"type":"checkboxes","options"') || !JSON.stringify(none.blocks).includes('lekam_outward_select'));
-  assert.ok(JSON.stringify(none.blocks).includes('No outward actions'));
+  assert.ok(!JSON.stringify(none.blocks).includes('lekam_outward_select'));
   const some = approvalCard({ request: { ...request, brief: { summary: 's', outward_actions: ['pr_create'] } }, config, requesterName: 'T' });
   assert.ok(JSON.stringify(some.blocks).includes('lekam_outward_select'));
   assert.ok(some.blocks.some((b) => b.block_id === `lekam_outward|${request.id}`), 'checkbox block carries the request id (checkboxes have no value)');
