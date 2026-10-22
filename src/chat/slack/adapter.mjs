@@ -34,7 +34,7 @@ export async function classifyEvent(ev, { botUserId, ownerIds, isEngaged }) {
 
 export class SlackAdapter {
   constructor({ bot_token, app_token, ownerIds, userTokens = new Map(), ownerPostFooter = true, log = () => {} }) {
-    this.ownerPostFooter = ownerPostFooter; this.appId = null;
+    this.ownerPostFooter = ownerPostFooter; this.appName = 'Lekam';
     this.ownerIds = ownerIds; this.log = log; this.botUserId = null;
     this.tokens = { bot_token, app_token };
     this.userTokens = userTokens; this.userClients = new Map(); // owner id -> WebClient posting as that owner
@@ -54,7 +54,8 @@ export class SlackAdapter {
     this.client = this.app.client;
     const auth = await this.client.auth.test();
     this.botUserId = auth.user_id;
-    try { this.appId = (await this.client.bots.info({ bot: auth.bot_id })).bot?.app_id ?? null; } catch (e) { this.log('warn', `bots.info failed: ${e.message}`); }
+    // The Slack app's own name, for the "Sent using <app>" footer on posts as an owner.
+    try { this.appName = (await this.client.bots.info({ bot: auth.bot_id })).bot?.name || this.appName; } catch (e) { this.log('warn', `bots.info failed: ${e.message}`); }
     if (this.userTokens.size) {
       const { WebClient } = await import('@slack/web-api');
       for (const [id, token] of this.userTokens) {
@@ -113,7 +114,7 @@ export class SlackAdapter {
     if (!client) { const r = await this.client.chat.postMessage({ channel, thread_ts, ...m }); return { channel: r.channel, ts: r.ts }; }
     const echo = { channel, user: as, norm: normText(m.text), ts: null, until: Date.now() + 120_000 };
     this.echoes.push(echo); // registered before the call: the event can beat the HTTP response
-    const body = this.ownerPostFooter ? withFooter(m, this.appId) : m;
+    const body = this.ownerPostFooter ? withFooter(m, this.appName) : m;
     const r = await client.chat.postMessage({ channel, thread_ts, unfurl_links: false, unfurl_media: false, ...body });
     echo.ts = r.ts;
     return { channel: r.channel, ts: r.ts, as };
@@ -157,10 +158,9 @@ export class SlackAdapter {
   }
 }
 
-/** Pure: add a small grey "Sent using Lekam" line under a message posted as an owner (no @-mention, so it can't tag Lekam). */
-export function withFooter(m, appId = null) {
-  const name = appId ? `<https://slack.com/app_redirect?app=${appId}|Lekam>` : 'Lekam';
-  const footer = { type: 'context', elements: [{ type: 'mrkdwn', text: `*Sent using* ${name}` }] };
+/** Pure: add a small grey "Sent using <app name>" line under a message posted as an owner. Plain text: no link, no @-mention. */
+export function withFooter(m, appName = 'Lekam') {
+  const footer = { type: 'context', elements: [{ type: 'mrkdwn', text: `*Sent using* ${appName}` }] };
   if (Array.isArray(m.blocks)) return { ...m, blocks: [...m.blocks, footer] };
   // Section text is capped at 3000 chars: split long messages on paragraph (then line) boundaries.
   const chunks = [];

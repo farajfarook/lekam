@@ -42,10 +42,10 @@ test('messages posted as the owner are not read back as the owner talking', () =
   assert.equal(a.isEcho({ channel: 'C', user: 'UOWN', ts: '6', text: 'Report done.' }), false, 'each echo is consumed once');
 });
 test('owner posts get a small "Sent using Lekam" footer without tagging Lekam; long text is split under the 3000-char cap', () => {
-  const m = withFooter({ text: 'Hi there' }, 'A123');
+  const m = withFooter({ text: 'Hi there' }, 'Lekam');
   assert.equal(m.text, 'Hi there', 'notification text has no footer');
-  assert.deepEqual(m.blocks.at(-1), { type: 'context', elements: [{ type: 'mrkdwn', text: '*Sent using* <https://slack.com/app_redirect?app=A123|Lekam>' }] });
-  assert.ok(!JSON.stringify(m.blocks).includes('<@'));
+  assert.deepEqual(m.blocks.at(-1), { type: 'context', elements: [{ type: 'mrkdwn', text: '*Sent using* Lekam' }] });
+  assert.ok(!JSON.stringify(m.blocks).includes('<@') && !JSON.stringify(m.blocks).includes('http'));
   const long = withFooter({ text: ('para '.repeat(300) + '\n\n').repeat(6) });
   assert.ok(long.blocks.filter((b) => b.type === 'section').every((b) => b.text.text.length <= 3000));
   assert.ok(long.blocks.filter((b) => b.type === 'section').length >= 3);
