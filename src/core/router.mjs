@@ -22,11 +22,14 @@ export function decideNew(message, cls, config) {
   const { kind } = message; // bot_mention | owner_mention
   if (!cls) return { type: 'reply', text: "I couldn't make sense of that just now. Try again in a moment." };
   const low = cls.confidence < config.brain.threshold;
+  // A question an agent needs tools to answer ("what did the team do today") is work, like a task.
+  const toolQuestion = cls.intent === 'question' && cls.actionable;
   if (kind === 'owner_mention') {
-    if (cls.intent === 'task_request' && cls.actionable && !low) return { type: 'card', kind, lowConfidence: false };
+    if ((cls.intent === 'task_request' || toolQuestion) && cls.actionable && !low) return { type: 'card', kind, lowConfidence: false };
     return { type: 'ignore', reason: low ? 'below_threshold' : `intent_${cls.intent}` };
   }
   // bot_mention
+  if (toolQuestion) return { type: 'card', kind, lowConfidence: low };
   switch (cls.intent) {
     case 'task_request': return { type: 'card', kind, lowConfidence: low };
     case 'needs_clarification': return { type: 'clarify', question: cls.clarifying_question ?? 'Could you say a bit more about what you need?' };

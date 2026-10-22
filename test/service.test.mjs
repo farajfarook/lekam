@@ -181,15 +181,27 @@ test('duplicate events are dropped; rate limit replies once', async () => {
   assert.ok(h.store.auditTail(50).some((r) => r.type === 'rate_limited'));
 });
 
-test('auto-post ticked posts result straight to the thread', async () => {
+test('results always wait for the owner; the card has no auto-post option', async () => {
   const h = await harness({ execScript: { start: 'All sorted.' } });
   const m = await h.chat.inject({ kind: 'bot_mention', channel: CHAN, user: REQ, text: 'fix the export' });
   const req = h.store.findByThread(CHAN, m.thread_ts);
-  await h.chat.select(ACTIONS.AUTO_POST, req.id, OWNER, ['auto_post']);
+  assert.ok(!JSON.stringify(h.chat.dms[0].blocks).includes('without asking me'));
   await h.chat.click(ACTIONS.APPROVE_TASK, req.id, OWNER, h.chat.dms[0]);
   await tick();
-  assert.equal(h.store.getRequest(req.id).state, 'RELEASED');
-  assert.equal(h.chat.posts.at(-1).text, 'All sorted.');
+  assert.equal(h.store.getRequest(req.id).state, 'DONE');
+  assert.ok(!h.chat.posts.some((p) => p.text === 'All sorted.'), 'not posted before the owner says so');
+  assert.ok(JSON.stringify(h.chat.lastDm().blocks).includes(ACTIONS.POST_RESULT));
+});
+
+test('owner tagging themselves with a tool question gets a card, then "On it" after Delegate', async () => {
+  const h = await harness({ brainScript: () => cls({ intent: 'question', actionable: true, reply_to_user: null, brief: { summary: "Summarise what the team did today and report back", skill: null, repo: null, outward_actions: [], notes: '' } }) });
+  const m = await h.chat.inject({ kind: 'owner_mention', owner: OWNER, channel: CHAN, user: OWNER, text: 'what did your team do today' });
+  assert.equal(h.chat.posts.length, 0);
+  const req = h.store.findByThread(CHAN, m.thread_ts);
+  assert.equal(req.state, 'PENDING_APPROVAL');
+  await h.chat.click(ACTIONS.DELEGATE, req.id, OWNER, h.chat.dms[0]);
+  await tick();
+  assert.match(h.chat.posts[0].text, /^On it\./);
 });
 
 test('untagged reply in a thread where Lekam spoke is treated as a mention', async () => {

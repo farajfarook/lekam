@@ -73,10 +73,10 @@ Decline (bot_mention) SHALL post one short line in the thread and set 🚫. Igno
 - **THEN** the stored brief reflects both edits and the re-rendered card shows them
 
 ### Requirement: Result release
-When a session finishes, the owner SHALL receive a DM with the final report and **Post to thread** / **Discard**. If the approval card's "auto-post result" checkbox was ticked, the report SHALL be posted directly. Phase 1 default is unticked.
+When a session finishes, the owner SHALL receive a DM with the final report and **Post to thread** / **Discard**. Nothing is posted to the thread without that second owner action; there is no auto-post option.
 
 #### Scenario: result release
-- **WHEN** a session finishes and the card did not have auto-post ticked
+- **WHEN** a session finishes
 - **THEN** the owner receives the report by DM with Post to thread / Discard and the thread is untouched until Post is clicked
 
 ### Requirement: Rate limits

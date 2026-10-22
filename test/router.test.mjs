@@ -15,11 +15,15 @@ test('decideNew bot_mention', () => {
   assert.equal(decideNew({ kind: 'bot_mention' }, cls({ intent: 'chitchat', reply_to_user: 'Hi.' }), c).text, 'Hi.');
   assert.equal(decideNew({ kind: 'bot_mention' }, cls({ intent: 'fyi', reply_to_user: null }), c).type, 'ignore');
   assert.equal(decideNew({ kind: 'bot_mention' }, null, c).type, 'reply');
+  assert.equal(decideNew({ kind: 'bot_mention' }, cls({ intent: 'question', actionable: true }), c).type, 'card');
+  assert.equal(decideNew({ kind: 'bot_mention' }, cls({ intent: 'question', actionable: false, reply_to_user: 'Ask me anything.' }), c).type, 'reply');
 });
 test('decideNew owner_mention', () => {
   assert.equal(decideNew({ kind: 'owner_mention' }, cls(), c).type, 'card');
   assert.equal(decideNew({ kind: 'owner_mention' }, cls({ confidence: 0.69 }), c).reason, 'below_threshold');
-  assert.equal(decideNew({ kind: 'owner_mention' }, cls({ intent: 'question' }), c).reason, 'intent_question');
+  assert.equal(decideNew({ kind: 'owner_mention' }, cls({ intent: 'question', actionable: false }), c).reason, 'intent_question');
+  assert.equal(decideNew({ kind: 'owner_mention' }, cls({ intent: 'question', actionable: true }), c).type, 'card', 'tool question to the owner is work');
+  assert.equal(decideNew({ kind: 'owner_mention' }, cls({ intent: 'question', actionable: true, confidence: 0.5 }), c).type, 'ignore');
   assert.equal(decideNew({ kind: 'owner_mention' }, cls({ actionable: false }), c).type, 'ignore');
 });
 test('decideFollowup', () => {

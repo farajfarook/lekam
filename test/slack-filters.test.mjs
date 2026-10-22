@@ -11,10 +11,12 @@ test('bot mention and DM', async () => {
   const inThread = await classifyEvent({ type: 'message', user: 'U1', channel: 'C', ts: '2', thread_ts: '1', text: '<@UBOT> again' }, ctx());
   assert.equal(inThread.thread_ts, '1');
 });
-test('owner mention by non-owner only', async () => {
+test('owner mention, including the owner tagging themselves', async () => {
   const m = await classifyEvent({ type: 'message', user: 'U1', channel: 'C', ts: '1', text: '<@UOWN> look' }, ctx());
   assert.equal(m.kind, 'owner_mention'); assert.equal(m.owner, 'UOWN'); assert.equal(m.text, 'look');
-  assert.equal(await classifyEvent({ type: 'message', user: 'UOWN', channel: 'C', ts: '1', text: '<@UOWN> me' }, ctx()), null);
+  const self = await classifyEvent({ type: 'message', user: 'UOWN', channel: 'C', ts: '1', text: '<@UOWN> what did your team do today' }, ctx());
+  assert.equal(self.kind, 'owner_mention'); assert.equal(self.owner, 'UOWN'); assert.equal(self.text, 'what did your team do today');
+  assert.equal(await classifyEvent({ type: 'message', user: 'UOWN', channel: 'C', ts: '1', text: 'no tag here' }, ctx()), null);
 });
 test('followups only in engaged threads', async () => {
   const ev = { type: 'message', user: 'U1', channel: 'C', ts: '2', thread_ts: '1', text: 'more' };

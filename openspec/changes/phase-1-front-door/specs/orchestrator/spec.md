@@ -41,11 +41,15 @@ The system prompt SHALL begin with the contents of `persona.md`. The shipped def
 - **THEN** the system prompt begins with the exact contents of `persona.md`
 
 ### Requirement: Confidence threshold
-Config `brain.threshold` (default 0.7) SHALL be applied by core: an `owner_mention` becomes a card only if `actionable && confidence >= threshold`. A `bot_mention` with `intent = task_request` SHALL always become a card, flagged "low confidence" when below threshold.
+Config `brain.threshold` (default 0.7) SHALL be applied by core: an `owner_mention` becomes a card only if `intent` is `task_request` or `question`, `actionable`, and `confidence >= threshold`. A `bot_mention` with `intent = task_request`, or an actionable `question` (one that needs tools or live data to answer), SHALL always become a card, flagged "low confidence" when below threshold.
 
 #### Scenario: confidence threshold
 - **WHEN** an owner_mention is classified actionable with confidence 0.6 and threshold is 0.7
 - **THEN** no card is sent and an audit row `below_threshold` is written
+
+#### Scenario: actionable question to the owner
+- **WHEN** an owner_mention "what did your team do today" is classified `question`, actionable, confidence 0.85
+- **THEN** a card is sent with a brief to find out and report back
 
 ### Requirement: Recent outcomes as context
 The prompt SHALL include up to `brain.recent_outcomes` (default 10) one-line summaries of recently completed requests so the brain can answer "did X get done" without tools.

@@ -83,7 +83,7 @@ A pending card expires after `approvals.ttl` (default 4h for owner-mention sugge
 "Discuss first" starts the session now with an *investigate brief* (read, reproduce, propose; change nothing; no outward actions). Owner converses via Paseo (link on the card) or a DM thread piped to the session. *Proceed* sends the go brief to the same session; *Drop* archives it. Phase 1 relies on the brief; enforcement is a later phase.
 
 ### D8. Results go to the owner first
-On session finish, the final message is DM'd to the owner with Post / Discard. Posting to the thread is a second owner action unless the approval card had "auto-post result" ticked. Default off.
+On session finish, the final message is DM'd to the owner with Post / Discard. Posting to the thread is always a second owner action (the auto-post option was removed).
 
 ### D9. Secrets
 `lekam.yml` names env vars (`api_key_env: LEKAM_BRAIN_KEY`); the loader reads them and never logs them. `lekam check` reports presence/length only.
@@ -129,7 +129,7 @@ Output schema (strict):
 }
 ```
 
-`actionable && confidence >= brain.threshold` is the only thing that creates a card for owner-mentions. For bot-mentions a card is created for any `task_request`; below-threshold ones are marked "low confidence" on the card.
+`(task_request || question) && actionable && confidence >= brain.threshold` is the only thing that creates a card for owner-mentions. For bot-mentions a card is created for any `task_request` or actionable `question`; below-threshold ones are marked "low confidence" on the card.
 
 ## Risks and mitigations
 

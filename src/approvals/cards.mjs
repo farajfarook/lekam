@@ -15,7 +15,6 @@ export const ACTIONS = Object.freeze({
   POST_RESULT: 'lekam_post_result',
   DISCARD_RESULT: 'lekam_discard_result',
   OUTWARD_SELECT: 'lekam_outward_select',
-  AUTO_POST: 'lekam_auto_post',
 });
 export const EDIT_VIEW_ID = 'lekam_edit_brief';
 
@@ -54,15 +53,12 @@ function briefBlocks({ request, config, selected }) {
   } else if (ids.length) {
     const options = ids.map((id) => ({ text: { type: 'plain_text', text: config.outward_actions[id] }, value: id }));
     const initial = options.filter((o) => proposed.includes(o.value));
+    // Checkbox actions carry no `value`; the adapter reads the request id from the block_id.
     blocks.push({
-      type: 'section', text: { type: 'mrkdwn', text: '*Outward actions the agent may take:*' },
+      type: 'section', block_id: `lekam_outward|${request.id}`, text: { type: 'mrkdwn', text: '*Outward actions the agent may take:*' },
       accessory: { type: 'checkboxes', action_id: ACTIONS.OUTWARD_SELECT, options, ...(initial.length ? { initial_options: initial } : {}) },
     });
   }
-  blocks.push({
-    type: 'actions', block_id: 'lekam_opts',
-    elements: [{ type: 'checkboxes', action_id: ACTIONS.AUTO_POST, options: [{ text: { type: 'plain_text', text: 'Post the result to the thread without asking me' }, value: 'auto_post' }], ...(request.auto_post ? { initial_options: [{ text: { type: 'plain_text', text: 'Post the result to the thread without asking me' }, value: 'auto_post' }] } : {}) }],
-  });
   return blocks;
 }
 

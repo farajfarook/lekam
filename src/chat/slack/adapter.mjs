@@ -23,10 +23,9 @@ export async function classifyEvent(ev, { botUserId, ownerIds, isEngaged }) {
   const base = { channel, ts, thread_ts, user: ev.user, event_ts: ev.event_ts, raw_text: text, text: stripMentions(text), is_dm: ev.channel_type === 'im' };
   if (!base.text) return null;
   if (mentions(text, botUserId) || base.is_dm) return { kind: 'bot_mention', ...base };
-  if (!ownerIds.has(ev.user)) {
-    const owner = [...ownerIds].find((id) => mentions(text, id));
-    if (owner) return { kind: 'owner_mention', owner, ...base };
-  }
+  // Someone tags an owner. An owner tagging themselves counts too ("@Faraj what did the team do today").
+  const owner = mentions(text, ev.user) && ownerIds.has(ev.user) ? ev.user : [...ownerIds].find((id) => id !== ev.user && mentions(text, id));
+  if (owner) return { kind: 'owner_mention', owner, ...base };
   if (ev.thread_ts && (await isEngaged(channel, ev.thread_ts))) return { kind: 'followup', ...base };
   return null;
 }
@@ -68,7 +67,8 @@ export class SlackAdapter {
     this.app.action(/^lekam_/, async ({ ack, body, action, respond }) => {
       await ack();
       const payload = {
-        action_id: action.action_id, value: action.value ?? null, user: body.user.id, channel: body.channel?.id ?? null,
+        // Checkboxes have no value: fall back to the request id carried in the block_id ("lekam_x|<id>").
+        action_id: action.action_id, value: action.value ?? (action.block_id?.split('|').slice(1).join('|') || null), user: body.user.id, channel: body.channel?.id ?? null,
         message_ts: body.message?.ts ?? null, trigger_id: body.trigger_id,
         selected: action.selected_options?.map((o) => o.value) ?? null, respond,
       };

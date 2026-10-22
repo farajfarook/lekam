@@ -19,14 +19,14 @@ Slack ──Socket Mode──▶ lekam ──▶ brain (LLM, JSON only, no tools
 - The *brain* classifies messages and drafts briefs. It has no tools, no MCP, no network beyond one chat-completion call. It returns JSON; deterministic code decides.
 - Approval is a Block Kit button pressed by a configured owner. Text, reactions and timeouts never approve. Timeouts deny.
 - The owner approves a *scope* (brief + allowed outward actions). Follow-ups that stay in scope flow to the same agent; anything that smells like a scope change (new repo, PR, deploy, Jira, prod…) comes back as a new card.
-- Results go to the owner first, with **Post to thread** / **Discard**, unless they ticked auto-post.
+- Results always go to the owner first, with **Post to thread** / **Discard**. Nothing reaches the thread without that second tap.
 
 ## What it does
 
 | Someone… | Lekam… |
 |---|---|
 | mentions `@Lekam` with a task | reacts 👀, sends the owner a card (verbatim request, proposed brief, skill, repo, outward-action checkboxes). Buttons: Approve task · Approve once · Discuss first · Edit brief · Decline |
-| tags **the owner** with a task | stays silent in the channel; DMs the owner: Delegate · Delegate (no outward actions) · Discuss first · Edit brief · Ignore. Only after Delegate does it speak in the thread |
+| tags **the owner** with a task or a question that needs tools ("what did your team do today?"); the owner can tag themselves to ask Lekam | stays silent in the channel; DMs the owner: Delegate · Delegate (no outward actions) · Discuss first · Edit brief · Ignore. Only after Delegate does it speak in the thread |
 | replies in a thread Lekam is working on | forwards in-scope follow-ups to the same agent session; cards scope changes |
 | asks something that needs no agent | answers briefly in persona, or stays quiet |
 
@@ -59,6 +59,7 @@ cp config/persona.md config/guardrails.md .     # edit to taste
    node src/cli.mjs run
    ```
 6. Invite the bot to a channel: `/invite @Lekam`. It only hears channels it's in.
+7. To DM Lekam: api.slack.com/apps → your app → **App Home** → **Show Tabs** → turn on **Messages Tab** and tick **Allow users to send Slash commands and messages from the messages tab**. Without it Slack shows "Sending messages to this app has been turned off". Restart the Slack client after changing it.
 
 As a service: `config/lekam.service` (systemd user unit). Without a login session, run `systemctl --user` with `XDG_RUNTIME_DIR=/run/user/$(id -u)` and `DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus` set, and `loginctl enable-linger $USER` so it starts at boot.
 
@@ -68,7 +69,7 @@ Everything personal lives in `lekam.yml`, `persona.md` (the bot's voice) and `gu
 
 - `owners[]` — one or more. Each has a Slack id, the channels it is default for, and its own executor (`paseo_url`, `provider/model`, `cwd`, `max_concurrent`, `run_timeout`).
 - `brain` — endpoint, models (`classify_model`, optional stronger `brief_model`), `threshold` (owner-mentions below it never card), context sizes.
-- `approvals` — TTLs per kind (expiry = deny), `force_card_patterns`, auto-post default.
+- `approvals` — TTLs per kind (expiry = deny), `force_card_patterns`, `outward_actions_mode`.
 - `outward_actions` — the ids the brain may propose and you approve per request.
 - `repos`, `skills_dirs` — the catalogue the brain sees. Skills are read from `*/SKILL.md` frontmatter (`name`, `description`, optional `lekam_outward_actions`). A `catalogue_file` can replace the auto-generated skills section.
 

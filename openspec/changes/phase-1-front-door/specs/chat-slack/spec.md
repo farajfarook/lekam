@@ -31,14 +31,18 @@ The adapter SHALL emit a `bot_mention` message to core when the bot user is ment
 - **THEN** `thread_ts` is the parent message's ts, so the request is keyed on the existing thread
 
 ### Requirement: Trigger on owner mention
-The adapter SHALL emit an `owner_mention` message when a non-bot, non-owner user mentions a configured owner's Slack id in a channel the bot is in. The adapter SHALL NOT react or reply in the channel for an `owner_mention`.
+The adapter SHALL emit an `owner_mention` message when a non-bot user mentions a configured owner's Slack id in a channel the bot is in. An owner mentioning themselves counts (it is how the owner asks Lekam in a channel without tagging the bot); an owner mentioning a different owner does not. The adapter SHALL NOT react or reply in the channel for an `owner_mention`.
 
 #### Scenario: owner tagged by a teammate
 - **WHEN** Ting posts `<@OWNER> the export is blank` in #team
 - **THEN** core receives `{ kind: "owner_mention", owner: OWNER, ... }` and nothing is posted or reacted in #team
 
-#### Scenario: owner tags themselves or another owner
-- **WHEN** the message author is any configured owner
+#### Scenario: owner tags themselves
+- **WHEN** OWNER posts `<@OWNER> what did your team do today` in #team
+- **THEN** core receives `{ kind: "owner_mention", owner: OWNER, ... }`
+
+#### Scenario: owner tags another owner
+- **WHEN** OWNER posts `<@OWNER2> look at this`
 - **THEN** no `owner_mention` is emitted
 
 ### Requirement: Follow-ups in engaged threads

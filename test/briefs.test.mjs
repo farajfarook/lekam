@@ -38,4 +38,5 @@ test('outward checkboxes only appear when the brief proposes some', () => {
   assert.ok(JSON.stringify(none.blocks).includes('No outward actions'));
   const some = approvalCard({ request: { ...request, brief: { summary: 's', outward_actions: ['pr_create'] } }, config, requesterName: 'T' });
   assert.ok(JSON.stringify(some.blocks).includes('lekam_outward_select'));
+  assert.ok(some.blocks.some((b) => b.block_id === `lekam_outward|${request.id}`), 'checkbox block carries the request id (checkboxes have no value)');
 });
