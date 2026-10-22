@@ -124,8 +124,8 @@ export class SlackAdapter {
   async dm(user, msg, thread_ts = undefined) {
     const conv = await this.client.conversations.open({ users: user });
     const m = outgoing(msg);
-    // No unfurls: the card's own link would otherwise expand into a second copy of the request.
-    const r = await this.client.chat.postMessage({ channel: conv.channel.id, ...(thread_ts ? { thread_ts } : {}), unfurl_links: false, unfurl_media: false, ...m });
+    // Unfurls stay on: the approval card relies on Slack's preview of the original message.
+    const r = await this.client.chat.postMessage({ channel: conv.channel.id, ...(thread_ts ? { thread_ts } : {}), ...m });
     return { channel: r.channel, ts: r.ts };
   }
   async update(channel, ts, msg) {

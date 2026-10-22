@@ -24,23 +24,30 @@ const btn = (text, action_id, value, style) => ({ type: 'button', text: { type: 
 const quote = (s) => s.split('\n').map((l) => '> ' + l).join('\n');
 const trunc = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
 
-// The card is deliberately short: who/where + link, the request, one plan line, buttons.
-// Notes, confidence and the request id live in Edit brief / the audit log, not on the card.
+// The card is deliberately short: one plan line, buttons, and Slack's own preview of the original
+// message (unfurled from the thread link). Notes, confidence and the request id are not on the card.
+/** True when Slack can preview the original for the owner: a channel message with a permalink. DMs to Lekam can't be previewed. */
+export const previewable = ({ permalink, channelName }) => !!(permalink && channelName);
+
 function headerBlocks({ request, requesterName, permalink, channelName, lowConfidence, excerpt = [] }) {
-  const kind = request.kind === 'owner_mention' ? (request.requester === request.owner ? 'asked' : 'tagged you') : 'asked Lekam';
-  const where = channelName ? '#' + channelName : 'a DM';
   const cls = request.classification ?? {};
   const flags = [cls.urgent ? ':rotating_light: urgent' : null, lowConfidence ? ':grey_question: unsure this is a request' : null].filter(Boolean);
-  const head = `*${requesterName ?? request.requester}* ${kind} in ${permalink ? `<${permalink}|${where}>` : where}${flags.length ? ' · ' + flags.join(' · ') : ''}`;
-  const blocks = [md(`${head}\n${quote(trunc(request.request_text, 600))}`)];
+  const blocks = [];
+  if (!previewable({ permalink, channelName })) {
+    // No preview possible: say who asked and quote the request verbatim instead.
+    const kind = request.kind === 'owner_mention' ? (request.requester === request.owner ? 'asked' : 'tagged you') : 'asked Lekam';
+    blocks.push(md(`*${requesterName ?? request.requester}* ${kind} in ${channelName ? '#' + channelName : 'a DM'}${flags.length ? ' · ' + flags.join(' · ') : ''}\n${quote(trunc(request.request_text, 600))}`));
+  } else if (flags.length) blocks.push(ctx(flags.join(' · ')));
   if (excerpt.length) blocks.push(ctx('Earlier in the thread: ' + excerpt.slice(-2).map((m) => `${m.name}: ${trunc(m.text.replace(/\n+/g, ' '), 100)}`).join(' · ')));
   return blocks;
 }
 
-function briefBlocks({ request, config, selected }) {
+function briefBlocks({ request, config, selected, permalink, channelName }) {
   const b = request.brief ?? {};
   const extras = [b.skill ? `skill \`${b.skill}\`` : null, b.repo ? `repo \`${b.repo}\`` : null].filter(Boolean);
-  const blocks = [md(`*Plan:* ${trunc(b.summary || '(none)', 300)}${extras.length ? `\n_${extras.join(' · ')}_` : ''}`)];
+  // The thread link here is what Slack unfurls into the preview of the original message.
+  const link = previewable({ permalink, channelName }) ? ` · <${permalink}|thread>` : '';
+  const blocks = [md(`*Plan:* ${trunc(b.summary || '(none)', 300)}${link}${extras.length ? `\n_${extras.join(' · ')}_` : ''}`)];
   const ids = Object.keys(config.outward_actions);
   const proposed = selected ?? b.outward_actions ?? [];
   const mode = config.approvals?.outward_actions_mode ?? 'ask';
@@ -103,7 +110,7 @@ export function investigatingCard(args, { agentLink }) {
 export function resultCard({ request, report, agentLink, permalink = null, postAs = null }) {
   const ask = trunc(request.request_text.replace(/\n+/g, ' '), 80);
   return {
-    text: `Result: ${trunc(report, 100)}`,
+    text: `Result: ${trunc(report, 100)}`, unfurl_links: false, unfurl_media: false,
     blocks: [
       ctx(`Result for ${permalink ? `<${permalink}|${ask}>` : ask}${agentLink ? ` · <${agentLink}|Paseo>` : ''}`),
       md(trunc(report, 2800)),

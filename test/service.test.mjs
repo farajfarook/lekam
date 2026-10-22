@@ -14,7 +14,7 @@ test('bot mention -> card -> approve task -> run -> result DM -> post', async ()
   assert.equal(h.chat.dms.length, 1);
   const card = h.chat.dms[0];
   assert.equal(card.user, OWNER);
-  assert.ok(JSON.stringify(card.blocks).includes('> fix the export'), 'verbatim quote');
+  assert.ok(JSON.stringify(card.blocks).includes(`<https://slack.example/${CHAN}/${m.ts}|thread>`), 'thread link Slack unfurls into the original');
   assert.ok(JSON.stringify(card.blocks).includes(ACTIONS.APPROVE_TASK));
   // a reply in persona was posted
   assert.equal(h.chat.posts[0].text, 'On it once Faraj says yes.');
@@ -254,7 +254,7 @@ test('card shows thread context when the trigger refers back', async () => {
   h.chat.thread(CHAN, first.thread_ts).push({ user: REQ, text: 'check open issues in owner portal', ts: '9' });
   await h.chat.inject({ kind: 'followup', channel: CHAN, thread_ts: first.thread_ts, user: REQ, text: 'check again please' });
   const s = JSON.stringify(h.chat.lastDm().blocks);
-  assert.ok(s.includes('Earlier in the thread') && s.includes('check open issues in owner portal') && s.includes('> check again please'));
+  assert.ok(s.includes('Earlier in the thread') && s.includes('check open issues in owner portal') && s.includes('|thread>'));
 });
 
 test('brain receives display names, not ids', async () => {

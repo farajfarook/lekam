@@ -6,11 +6,11 @@ The approval gate is the product's security boundary. It presents the owner with
 ## ADDED Requirements
 
 ### Requirement: Card contents
-An approval card SHALL be short enough to read at a glance: one header line with the requester's name and the channel name linked to the original message, the verbatim request text (quoted, unmodified), at most two earlier thread messages when the request refers back, one **Plan** line (the brief summary, plus skill/repo when set), the outward actions as checkboxes only in `ask` mode when some are proposed, an urgent / "unsure this is a request" flag only when it applies, and the buttons. Notes, confidence and the request id SHALL NOT be shown on the card (notes are visible in Edit brief; the rest is in the audit log). The card DM SHALL NOT unfurl links, so the original message is not shown twice.
+An approval card SHALL be short enough to read at a glance: one **Plan** line (the brief summary, plus skill/repo when set) ending in a link to the original message, at most two earlier thread messages when the request refers back, the outward actions as checkboxes only in `ask` mode when some are proposed, an urgent / "unsure this is a request" flag only when it applies, and the buttons. For a channel message the card SHALL NOT repeat the requester, channel or request text: Slack's own unfurled preview of the linked message shows them verbatim. When no preview is possible (a DM to Lekam, or no permalink) the card SHALL instead name the requester and quote the verbatim request text. Notes, confidence and the request id SHALL NOT be shown on the card (notes are visible in Edit brief; the rest is in the audit log).
 
 #### Scenario: card contents
 - **WHEN** the brain proposes a brief for a request whose text is `fix the export <script>`
-- **THEN** the card shows that exact text in a quote block, unmodified, with the Plan line beneath it
+- **THEN** the card shows the Plan line with a thread link that Slack previews as the original message; for a DM to Lekam the card quotes that exact text, unmodified
 
 ### Requirement: Actions
 A card for a `bot_mention` SHALL offer: **Approve task**, **Approve once**, **Discuss first**, **Edit brief**, **Decline**. A card for an `owner_mention` SHALL offer: **Delegate**, **Delegate (no outward actions)**, **Discuss first**, **Edit brief**, **Ignore**.
