@@ -31,6 +31,9 @@ export function decideNew(message, cls, config) {
     return { type: 'ignore', reason: `self_tag_${cls.intent}` };
   }
   if (kind === 'owner_mention') {
+    // A tag is not an ask: "@Faraj & I tried" in a thread asking Preethi mentions the owner but is for Preethi.
+    // A DM to the owner is addressed to them by definition.
+    if (cls.addressed_to_owner === false && !message.dm) return { type: 'ignore', reason: 'not_addressed_to_owner' };
     if ((cls.intent === 'task_request' || toolQuestion) && cls.actionable && !low) return { type: 'card', kind, lowConfidence: false };
     return { type: 'ignore', reason: low ? 'below_threshold' : `intent_${cls.intent}` };
   }
@@ -45,10 +48,17 @@ export function decideNew(message, cls, config) {
 
 export function decideFollowup(message, request, cls, config) {
   const isOwner = message.user === request.owner;
-  if (isOwner) return { type: 'forward', text: message.text };
+  if (isOwner) {
+    // In the channel the owner is talking to people. The agent only hears them when they tag Lekam (or tag
+    // themselves to ask Lekam); steering happens in the DM session thread, which never comes through here.
+    if (message.kind === 'bot_mention' || message.self) return { type: 'forward', text: message.text };
+    return { type: 'ignore', reason: 'owner_untagged' };
+  }
   if (!request.scope) return { type: 'ignore', reason: 'not_yet_approved' }; // pending: wait for the owner
   if (forcesCard(message.text, config)) return { type: 'forward_or_card', text: message.text, reason: 'forced_pattern' };
   if (!cls) return { type: 'forward_or_card', text: message.text, reason: 'brain_error' };
+  // In a thread where someone asked the owner, only the owner speaks (through Post as owner); Lekam never chimes in as itself.
+  if (cls.followup === 'not_for_agent' && request.kind === 'owner_mention') return { type: 'ignore', reason: 'owner_thread_not_for_agent' };
   if (cls.followup === 'not_for_agent') return cls.reply_to_user ? { type: 'reply', text: cls.reply_to_user } : { type: 'ignore', reason: 'not_for_agent' };
   if (cls.followup === 'scope_change' || request.approval_mode === 'once') return { type: 'forward_or_card', text: message.text, reason: cls.followup === 'scope_change' ? 'scope_change' : 'approve_once' };
   return { type: 'forward', text: message.text };

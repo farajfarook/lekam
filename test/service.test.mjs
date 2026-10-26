@@ -118,11 +118,13 @@ test('follow-ups: in-scope forwards, scope change cards, owner bypasses, approve
   fu = 'in_scope';
   await h.chat.inject({ kind: 'followup', channel: CHAN, thread_ts: m.thread_ts, user: REQ, text: 'now raise the PR' });
   assert.equal(h.exec.calls.length, sends);
-  // owner follow-up bypasses everything
-  await h.chat.inject({ kind: 'followup', channel: CHAN, thread_ts: m.thread_ts, user: OWNER, text: 'use the test branch' });
-  await tick();
-  assert.ok(h.exec.calls.at(-1)[1].text.includes('use the test branch') && h.exec.calls.at(-1)[1].text.startsWith('<owner-message token='), 'owner follow-ups carry the owner token');
   assert.ok(h.chat.dms.length > dmsBefore);
+  // the owner talking to people in the channel thread is not an instruction to the agent (they steer in the DM thread)
+  const before = h.exec.calls.length;
+  await h.chat.inject({ kind: 'followup', channel: CHAN, thread_ts: m.thread_ts, user: OWNER, text: '@Preethi can you change the sub-tasks to stories' });
+  await tick();
+  assert.equal(h.exec.calls.length, before, 'untagged owner post in the channel is not forwarded');
+  assert.ok(h.store.auditTail(5).some((r) => r.type === 'owner_untagged_ignored'));
 });
 
 test('discuss first: investigate, pipe owner DM, proceed on same session', async () => {
@@ -275,6 +277,7 @@ test('outward_actions_mode: all grants everything and skips keyword cards; propo
   let m = await h.chat.inject({ kind: 'bot_mention', channel: CHAN, user: REQ, text: 'look at this' });
   let req = h.store.findByThread(CHAN, m.thread_ts);
   assert.ok(!JSON.stringify(h.chat.dms[0].blocks).includes('lekam_outward_select'));
+  assert.ok(JSON.stringify(h.chat.dms[0].blocks).includes('May take *any* outward action: Comment on Jira, Raise a PR'), 'the blanket grant is visible on the card');
   await h.chat.click(ACTIONS.APPROVE_TASK, req.id, OWNER, h.chat.dms[0]); await tick();
   assert.deepEqual(h.store.getRequest(req.id).scope.outward_actions, ['jira_comment', 'pr_create']);
   const sends = h.exec.calls.length;
@@ -444,4 +447,66 @@ test('captured DM to the owner: silent card that says "messaged you", reply goes
   await h.chat.click(ACTIONS.DELEGATE, req.id, OWNER, card); await tick();
   await h.chat.click(ACTIONS.POST_RESULT, req.id, OWNER, h.chat.lastDm());
   assert.deepEqual([h.chat.posts.at(-1).channel, h.chat.posts.at(-1).as, h.chat.posts.at(-1).text], ['DTING', OWNER, 'Build is green.']);
+});
+
+test('replay OP-316: "@Faraj & I tried" in a thread asking Preethi is not a request to the owner', async () => {
+  const h = await harness({ brainScript: (input) => (input.text.startsWith('@name:UOWNER &') ? cls({ intent: 'fyi', addressed_to_owner: false, actionable: false, brief: null, reply_to_user: null }) : cls()) });
+  const parent = await h.chat.inject({ kind: 'followup', channel: CHAN, user: 'UMARK', text: '@Preethi Prakash need your help to convert sub tasks OP-316,OP-317 and OP-318 to user stories' });
+  await h.chat.inject({ kind: 'owner_mention', owner: OWNER, channel: CHAN, thread_ts: parent.ts, user: 'UMARK', text: '@name:UOWNER & I tried, but looks like we dont have access' });
+  assert.equal(h.chat.dms.length, 0, 'no card');
+  assert.equal(h.chat.posts.length, 0);
+  assert.ok(h.store.auditTail(5).some((r) => r.type === 'decision' && r.data.reason === 'not_addressed_to_owner'));
+  assert.ok(h.brain.calls.at(-1).input.thread.some((m) => m.text.includes('@Preethi Prakash need your help')), 'the brain sees who the thread is addressed to');
+});
+
+test('the agent gets the thread, and an owner-thread follow-up never makes Lekam chime in as itself', async () => {
+  const h = await harness({ brainScript: (input) => (input.kind === 'followup' ? cls({ followup: 'not_for_agent', reply_to_user: 'Thanks, Markand.' }) : cls()), execScript: { start: 'Report.' } });
+  h.chat.postAs = new Set([OWNER]);
+  const parent = await h.chat.inject({ kind: 'followup', channel: CHAN, user: 'UMARK', text: 'earlier context line' });
+  await h.chat.inject({ kind: 'owner_mention', owner: OWNER, channel: CHAN, thread_ts: parent.ts, user: REQ, text: '@name:UOWNER can your team check the build?' });
+  const req = h.store.findByThread(CHAN, parent.ts);
+  await h.chat.click(ACTIONS.DELEGATE, req.id, OWNER, h.chat.dms[0]); await tick();
+  const start = h.exec.calls.find((c) => c[0] === 'start')[1];
+  assert.deepEqual(start.thread, [{ name: 'name:UMARK', text: 'earlier context line' }]);
+  assert.equal(start.channelName, 'chan-' + CHAN);
+  const posts = h.chat.posts.length;
+  await h.chat.inject({ kind: 'followup', channel: CHAN, thread_ts: parent.ts, user: 'UMARK', text: 'Right, I see this option' }); await tick();
+  assert.equal(h.chat.posts.length, posts, 'no persona reply in a thread where the owner was asked');
+});
+
+test('posts as the owner keep Lekam out of the thread; posts by another app as the owner are flagged, never acted on', async () => {
+  const h = await harness({ execScript: { start: 'Report.', send: 'sent' } });
+  h.chat.postAs = new Set([OWNER]);
+  const m = await h.chat.inject({ kind: 'owner_mention', owner: OWNER, channel: CHAN, user: REQ, text: '@name:UOWNER any open PRs?' });
+  const req = h.store.findByThread(CHAN, m.thread_ts);
+  await h.chat.click(ACTIONS.DELEGATE, req.id, OWNER, h.chat.dms[0]); await tick();
+  assert.equal(h.chat.posts.at(-1).as, OWNER, 'pickup ack went out as the owner');
+  assert.equal(h.store.botSpokeRecently(CHAN, m.thread_ts, { withinMs: 60e3 }), false, 'a post as the owner does not engage Lekam in the thread');
+  const sends = h.exec.calls.length; const dms = h.chat.dms.length;
+  await h.chat.inject({ kind: 'followup', channel: CHAN, thread_ts: m.thread_ts, user: OWNER, via_app: 'AOTHER', text: '@Preethi Markand and Faraj cannot convert them' }); await tick();
+  assert.equal(h.exec.calls.length, sends, 'not forwarded to the agent');
+  assert.equal(h.chat.dms.length, dms + 1);
+  assert.match(h.chat.lastDm().text, /posted as you .* by another app/);
+  assert.equal(h.chat.lastDm().thread_ts, h.chat.dms[0].ts, 'flag sits in the session thread');
+});
+
+test('agent turns are serialised per request: overlapping owner messages get one answer each', async () => {
+  let n = 0;
+  const h = await harness({ execScript: { start: 'first', send: () => ({ status: 'idle', text: `answer ${++n}`, error: null }) } });
+  h.exec.delayMs = 0;
+  const m = await h.chat.inject({ kind: 'bot_mention', channel: CHAN, user: REQ, text: 'fix the export' });
+  const req = h.store.findByThread(CHAN, m.thread_ts);
+  const card = h.chat.dms[0];
+  await h.chat.click(ACTIONS.APPROVE_TASK, req.id, OWNER, card); await tick();
+  h.exec.delayMs = 20;
+  let inFlight = 0, maxInFlight = 0;
+  const send = h.exec.send.bind(h.exec);
+  h.exec.send = async (args) => { inFlight++; maxInFlight = Math.max(maxInFlight, inFlight); try { return await send(args); } finally { inFlight--; } };
+  await Promise.all([
+    h.chat.inject({ kind: 'bot_mention', is_dm: true, channel: card.channel, thread_ts: card.ts, user: OWNER, text: 'one' }),
+    h.chat.inject({ kind: 'bot_mention', is_dm: true, channel: card.channel, thread_ts: card.ts, user: OWNER, text: 'two' }),
+  ]);
+  assert.equal(maxInFlight, 1);
+  const replies = h.chat.dms.slice(-2).map((d) => d.text);
+  assert.deepEqual(replies, ['answer 1', 'answer 2']);
 });

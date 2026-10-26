@@ -1,9 +1,29 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyEvent, stripMentions, normText, withFooter, SlackAdapter } from '../src/chat/slack/adapter.mjs';
-const ctx = (engaged = false) => ({ botUserId: 'UBOT', ownerIds: new Set(['UOWN']), isEngaged: () => engaged });
+import { classifyEvent, stripMentions, renderMentions, normText, withFooter, SlackAdapter } from '../src/chat/slack/adapter.mjs';
+const NAMES = { UOWN: 'Faraj Farook', UPREETHI: 'Preethi Prakash', UMARK: 'Markand Bhatt', UBOT: 'Lekam' };
+const ctx = (engaged = false) => ({ botUserId: 'UBOT', ownerIds: new Set(['UOWN']), isEngaged: () => engaged, nameOf: async (id) => NAMES[id] ?? id, appId: 'ALEKAM' });
 
 test('stripMentions', () => { assert.equal(stripMentions('<@UBOT> fix   it <@U1|bob>'), 'fix it'); });
+test('mentions are rendered as names, not deleted; entities unescaped; only Lekam\'s own tag is dropped', async () => {
+  const nameOf = async (id) => NAMES[id] ?? id;
+  assert.equal(await renderMentions('<@UOWN> &amp; I tried, but looks like we dont have access', nameOf), '@Faraj Farook & I tried, but looks like we dont have access');
+  assert.equal(await renderMentions('<@UPREETHI> need your help with OP-316', nameOf), '@Preethi Prakash need your help with OP-316');
+  assert.equal(await renderMentions('<@UBOT> ask <@UOWN>  about <#C1|team-ai> &lt;soon&gt; <!here>', nameOf, { drop: ['UBOT'] }), 'ask @Faraj Farook about #team-ai <soon> @here');
+  assert.equal(await renderMentions('hi <@UNKNOWN|someone>', async (id) => id), 'hi @someone', 'falls back to the label Slack sent');
+  assert.equal(await renderMentions('line one\n  line two', nameOf), 'line one\nline two', 'line breaks kept');
+});
+test('a reply that mentions the owner keeps who it was addressed to', async () => {
+  const m = await classifyEvent({ type: 'message', user: 'UMARK', channel: 'C', ts: '2', thread_ts: '1', text: '<@UOWN> &amp; I tried, but looks like we dont have access' }, ctx());
+  assert.deepEqual([m.kind, m.owner, m.text], ['owner_mention', 'UOWN', '@Faraj Farook & I tried, but looks like we dont have access']);
+});
+test('posts made through an app with a user token: Lekam\'s own are dropped, others are marked via_app', async () => {
+  assert.equal(await classifyEvent({ type: 'message', user: 'UOWN', app_id: 'ALEKAM', channel: 'C', ts: '3', thread_ts: '1', text: '<@UPREETHI> hi' }, ctx(true)), null);
+  const other = await classifyEvent({ type: 'message', user: 'UOWN', app_id: 'AOTHER', channel: 'C', ts: '4', thread_ts: '1', text: '<@UPREETHI> could you do it?' }, ctx(true));
+  assert.deepEqual([other.kind, other.via_app, other.text], ['followup', 'AOTHER', '@Preethi Prakash could you do it?']);
+  const typed = await classifyEvent({ type: 'message', user: 'UOWN', client_msg_id: 'abc', channel: 'C', ts: '5', thread_ts: '1', text: 'typed by hand' }, ctx(true));
+  assert.equal(typed.via_app, undefined);
+});
 test('bot mention and DM', async () => {
   assert.equal((await classifyEvent({ type: 'app_mention', user: 'U1', channel: 'C', ts: '1', text: '<@UBOT> fix' }, ctx())).kind, 'bot_mention');
   const dm = await classifyEvent({ type: 'message', channel_type: 'im', user: 'U1', channel: 'D', ts: '1', text: 'fix' }, ctx());
@@ -13,9 +33,9 @@ test('bot mention and DM', async () => {
 });
 test('owner mention, including the owner tagging themselves', async () => {
   const m = await classifyEvent({ type: 'message', user: 'U1', channel: 'C', ts: '1', text: '<@UOWN> look' }, ctx());
-  assert.equal(m.kind, 'owner_mention'); assert.equal(m.owner, 'UOWN'); assert.equal(m.text, 'look');
+  assert.equal(m.kind, 'owner_mention'); assert.equal(m.owner, 'UOWN'); assert.equal(m.text, '@Faraj Farook look');
   const self = await classifyEvent({ type: 'message', user: 'UOWN', channel: 'C', ts: '1', text: '<@UOWN> what did your team do today' }, ctx());
-  assert.equal(self.kind, 'owner_mention'); assert.equal(self.owner, 'UOWN'); assert.ok(self.self); assert.equal(self.text, 'what did your team do today');
+  assert.equal(self.kind, 'owner_mention'); assert.equal(self.owner, 'UOWN'); assert.ok(self.self); assert.equal(self.text, '@Faraj Farook what did your team do today');
   assert.equal(await classifyEvent({ type: 'message', user: 'UOWN', channel: 'C', ts: '1', text: 'no tag here' }, ctx()), null);
 });
 test('followups only in engaged threads', async () => {

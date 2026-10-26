@@ -24,7 +24,7 @@ export function testConfig(over = {}) {
   return resolveConfig(raw, { baseDir: here, envLookup: (n) => `${n}-value-xxxxxxxx` });
 }
 
-export const cls = (o = {}) => ({ intent: 'task_request', actionable: true, confidence: 0.9, urgent: false, reply_to_user: 'On it once Faraj says yes.', brief: { summary: 'Fix the blank PDF export', skill: 'support-case', repo: 'owner-portal', outward_actions: ['jira_comment', 'pr_create'], notes: '' }, followup: null, clarifying_question: null, ...o });
+export const cls = (o = {}) => ({ intent: 'task_request', addressed_to_owner: true, actionable: true, confidence: 0.9, urgent: false, reply_to_user: 'On it once Faraj says yes.', brief: { summary: 'Fix the blank PDF export', skill: 'support-case', repo: 'owner-portal', outward_actions: ['jira_comment', 'pr_create'], notes: '' }, followup: null, clarifying_question: null, ...o });
 
 export async function harness({ brainScript = () => cls(), execScript = {}, config = testConfig() } = {}) {
   const store = new Store(':memory:', { redact: config.secretValues });

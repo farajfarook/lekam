@@ -114,12 +114,12 @@ export class PaseoExecutor {
   }
 
   /** Start the real work. Resolves when the turn finishes with { sessionId, result }. onStarted(sessionId) fires once the agent exists. */
-  async start({ request, brief, allowed, permalink, requesterName, previousOutcome = null, onQueued, onStarted }) {
+  async start({ request, brief, allowed, permalink, requesterName, channelName = null, thread = [], previousOutcome = null, onQueued, onStarted }) {
     await this.sem.acquire(onQueued);
     try {
       const prompt = previousOutcome
-        ? handoffPrompt({ config: this.config, request, brief, allowed, previousOutcome, permalink, requesterName })
-        : workerPrompt({ config: this.config, request, brief, allowed, permalink, requesterName });
+        ? handoffPrompt({ config: this.config, request, brief, allowed, previousOutcome, permalink, requesterName, channelName, thread })
+        : workerPrompt({ config: this.config, request, brief, allowed, permalink, requesterName, channelName, thread });
       const h = await this._create(request, prompt, brief.summary);
       await onStarted?.(h.id);
       const result = await h.waitForFinish(this.run_timeout_ms);
@@ -128,8 +128,8 @@ export class PaseoExecutor {
   }
 
   /** Discuss-first: create the session with the investigate brief; resolves after its first turn. */
-  async startInvestigation({ request, brief, permalink, requesterName, onStarted }) {
-    const prompt = investigatePrompt({ config: this.config, request, brief, allowed: [], permalink, requesterName });
+  async startInvestigation({ request, brief, permalink, requesterName, channelName = null, thread = [], onStarted }) {
+    const prompt = investigatePrompt({ config: this.config, request, brief, allowed: [], permalink, requesterName, channelName, thread });
     const h = await this._create(request, prompt, `Investigate: ${brief.summary}`);
     await onStarted?.(h.id);
     const result = await h.waitForFinish(this.run_timeout_ms);

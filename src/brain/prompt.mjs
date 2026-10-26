@@ -3,9 +3,11 @@ const OUTPUT_RULES = `
 ## How to answer
 Return ONLY a JSON object matching the schema you were given. Field guidance:
 - intent: task_request (someone wants work done), question (wants information), fyi, chitchat, needs_clarification (a task, but too vague to brief).
+- Messages show tags as @Name. Read who each message in the thread is talking to before deciding anything.
+- addressed_to_owner: true when the message asks something of the owner, "your team", Lekam or the owner's agents. false when the owner is only mentioned while the message talks to someone else: "@Owner & I tried", "me and @Owner", cc, thanks or credit, telling someone that the owner has access or already did something, or a reply in a thread where the ask was made of another person. Example, owner Sam: "@Priya need your help converting ABC-12" then "@Sam & I tried, but we don't have access" is the asker telling Priya that they and Sam tried: addressed_to_owner=false. When false: intent fyi, actionable=false, brief=null. For kind=bot_mention and DMs it is true.
 - actionable: true only if an agent with tools could usefully do the work. Questions answerable from the thread are not actionable. Questions that need live data (Jira, GitHub PRs, Slack, standups, Datadog, "what did the team do today", "status of OP-123") ARE actionable: you cannot answer them yourself, an agent can.
 - kind=owner_mention with channel "a direct message to <owner>": someone DM'd the owner privately. Most DMs are conversation (greetings, opinions, scheduling, personal questions about the owner) and are NOT for agents: intent fyi/chitchat/question with actionable=false. Only a clear request for work, or a question an agent could answer from live data, is actionable.
-- kind=owner_mention: someone tagged the owner, or the owner tagged themselves to ask Lekam. Treat a request or actionable question addressed to the owner or "your team" as work for the owner's agents.
+- kind=owner_mention: someone tagged the owner, or the owner tagged themselves to ask Lekam. Treat a request or actionable question addressed to the owner or "your team" as work for the owner's agents. A tag alone does not make it a request to the owner: see addressed_to_owner.
 - confidence: how sure you are that this is a real request for the owner's agents (0-1).
 - urgent: outages, production incidents, "everyone", "down", "since X minutes".
 - reply_to_user: what the bot says in the thread, in persona, or null to say nothing. For kind=owner_mention this is ignored (the bot stays silent) - set null.

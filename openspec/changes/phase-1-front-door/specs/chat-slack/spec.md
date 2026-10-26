@@ -24,7 +24,7 @@ The adapter SHALL emit a `bot_mention` message to core when the bot user is ment
 
 #### Scenario: mention in a channel
 - **WHEN** a user posts `<@BOT> fix the export` in a channel the bot is in
-- **THEN** core receives `{ kind: "bot_mention", channel, ts, thread_ts: ts, user, text: "fix the export" }` with the mention stripped
+- **THEN** core receives `{ kind: "bot_mention", channel, ts, thread_ts: ts, user, text: "fix the export" }` with the bot's own mention removed
 
 #### Scenario: mention inside an existing thread
 - **WHEN** the mention is a reply inside a thread
@@ -53,7 +53,7 @@ The adapter SHALL emit a `followup` message for any non-bot reply in a thread th
 - **THEN** core receives `{ kind: "followup" }` for that thread
 
 ### Requirement: Ignore noise
-The adapter SHALL ignore messages from bots (including itself), message subtypes `message_changed`, `message_deleted`, `channel_join`, `channel_leave`, `bot_message`, and messages whose text is empty after stripping mentions. Edited messages SHALL NOT re-trigger.
+The adapter SHALL ignore messages from bots (including itself), message subtypes `message_changed`, `message_deleted`, `channel_join`, `channel_leave`, `bot_message`, messages Lekam itself posted with an owner's user token (their `app_id` is Lekam's), and messages that contain nothing but mentions. Edited messages SHALL NOT re-trigger.
 
 #### Scenario: ignore noise
 - **WHEN** Slack delivers a `message_changed` event for an earlier mention
@@ -81,7 +81,7 @@ The adapter SHALL expose `post(channel, thread_ts, text|blocks)`, `dm(user, text
 - **THEN** the adapter returns the DM channel id and message ts so the card can later be updated
 
 ### Requirement: Thread context
-The adapter SHALL expose `fetchThread(channel, thread_ts, limit)` returning recent messages (user, text, ts) for the brain's context, capped by `brain.thread_context_messages` (default 20).
+The adapter SHALL expose `fetchThread(channel, thread_ts, limit)` returning recent messages (user, text, ts) for the brain's context, capped by `brain.thread_context_messages` (default 20), with mentions rendered as in *Mentions are rendered, not deleted*.
 
 #### Scenario: thread context
 - **WHEN** a follow-up arrives in a 40-message thread
@@ -108,3 +108,17 @@ When an owner sets `capture_dms: true` and has a user token with `im:history` (u
 #### Scenario: colleague DMs the owner
 - **WHEN** Ting DMs Faraj "is the build green?" and Faraj captures DMs
 - **THEN** Faraj gets a card "Ting messaged you directly", and after Delegate and Post the answer appears in that DM from Faraj's account
+
+### Requirement: Mentions are rendered, not deleted
+Message text passed to core (and thread text from `fetchThread`) SHALL render `<@ID>` as `@Display Name`, channel references as `#name`, `<!here>`-style broadcasts as `@here`, and SHALL unescape `&amp;`, `&lt;`, `&gt;`. Only the bot's own mention on the triggering message is removed. Who a message is addressed to is part of its meaning: deleting tags turned "@Preethi need your help" into "need your help" and "@Faraj & I tried" into "& I tried", and the owner was asked to act on a conversation between two other people.
+
+#### Scenario: owner mentioned as a participant
+- **WHEN** Markand replies `<@OWNER> &amp; I tried, but we don't have access` in a thread whose parent is `<@PREETHI> need your help converting OP-316`
+- **THEN** core receives the text `@Faraj Farook & I tried, but we don't have access` and the thread text `@Preethi Prakash need your help converting OP-316`
+
+### Requirement: Posts made through other apps
+A message carrying an `app_id` and no `client_msg_id` was posted by an app with the author's user token, not typed by them. The adapter SHALL mark it `via_app: <app_id>` so core can tell it apart from the owner typing.
+
+#### Scenario: agent posts as the owner
+- **WHEN** an agent's Slack tool posts in a request thread with the owner's user token
+- **THEN** core receives the message with `via_app` set and does not treat it as the owner talking

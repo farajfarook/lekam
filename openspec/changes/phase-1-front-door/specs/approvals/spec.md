@@ -54,9 +54,17 @@ Approving SHALL record `scope = { brief, outward_actions }` on the request. Foll
 - **WHEN** a follow-up is classified `scope_change`, or its text matches any `approvals.force_card_patterns` (default: repo names from config, `\bPR\b`, `deploy`, `merge`, `prod`, `jira`, `email`, `delete`)
 - **THEN** a new card is sent to the owner and the follow-up is not forwarded until approved
 
-#### Scenario: owner writes in the thread
-- **WHEN** the follow-up author is the request's owner
+#### Scenario: owner tags Lekam in the thread
+- **WHEN** the request's owner tags Lekam (or tags themselves) in the channel thread of a live request
 - **THEN** it is forwarded to the session without a card
+
+#### Scenario: owner talks to people in the thread
+- **WHEN** the request's owner replies in the channel thread without tagging Lekam (e.g. "@Preethi can you change the sub-tasks to stories")
+- **THEN** nothing is forwarded to the agent and an audit row `owner_untagged_ignored` is written; the owner steers the agent in the DM session thread
+
+#### Scenario: someone replies where the owner was asked
+- **WHEN** a follow-up in an `owner_mention` thread is classified `not_for_agent`
+- **THEN** Lekam posts nothing: in those threads only the owner speaks, through an approved post
 
 ### Requirement: Decline and ignore wording
 Decline (bot_mention) SHALL post one short line in the thread and set 🚫. Ignore (owner_mention) SHALL post nothing.
@@ -93,3 +101,9 @@ Core SHALL enforce `limits.per_user_per_hour` (default 10) new messages per requ
 - **WHEN** a requester has created `per_user_per_hour` requests in the last hour and mentions the bot again
 - **THEN** the bot replies once that it is rate-limited for now, no card is sent, and an audit row `rate_limited` is written
 
+### Requirement: Outward actions are visible on the card
+In `outward_actions_mode: all` every configured outward action is granted on approval; the card SHALL say so ("May take *any* outward action: …") so the owner approves exactly what will run. In `proposed` mode the card lists the brief's actions; in `ask` mode they are checkboxes.
+
+#### Scenario: all mode
+- **WHEN** a card is shown with `outward_actions_mode: all`
+- **THEN** it carries a line naming every outward action the agent may take

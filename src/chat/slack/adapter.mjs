@@ -5,23 +5,48 @@ import { toMrkdwn } from './mrkdwn.mjs';
 
 const IGNORED_SUBTYPES = new Set(['message_changed', 'message_deleted', 'channel_join', 'channel_leave', 'bot_message', 'message_replied', 'thread_broadcast', 'group_join', 'group_leave']);
 
-/** Pure: strip <@ID> mentions, <#C|name> channel refs and trailing whitespace. */
+/** Pure: strip <@ID> mentions and collapse whitespace. Only used to test whether a message says anything besides tags. */
 export function stripMentions(text = '') {
   return text.replace(/<@[A-Z0-9]+(?:\|[^>]*)?>/g, '').replace(/\s+/g, ' ').trim();
 }
 export function mentions(text = '', id) { return new RegExp(`<@${id}(?:\\|[^>]*)?>`).test(text); }
 
+const MENTION = /<@([A-Z0-9]+)(?:\|([^>]*))?>/g;
+/** Pure: Slack escapes &, < and > in message text. */
+export function unescapeSlack(s = '') { return String(s).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&'); }
+/**
+ * Readable text for the brain, cards and agents: <@ID> becomes @Display Name (who a message is addressed to matters;
+ * deleting tags turned "@Preethi need your help" into "need your help"), channel/group refs become #name / @here,
+ * entities are unescaped. Ids in `drop` (Lekam itself on a bot mention) are removed: they only address the bot.
+ */
+export async function renderMentions(text = '', nameOf = async (id) => id, { drop = [] } = {}) {
+  const names = new Map();
+  for (const [, id] of String(text).matchAll(MENTION)) if (!drop.includes(id) && !names.has(id)) names.set(id, await nameOf(id));
+  const out = String(text)
+    .replace(MENTION, (_, id, label) => (drop.includes(id) ? '' : `@${(names.get(id) && names.get(id) !== id ? names.get(id) : label) || id}`))
+    .replace(/<#[A-Z0-9]+\|([^>]*)>/g, '#$1')
+    .replace(/<!(here|channel|everyone)(?:\|[^>]*)?>/g, '@$1')
+    .replace(/<!subteam\^[A-Z0-9]+\|([^>]*)>/g, '$1');
+  return unescapeSlack(out).replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').trim();
+}
+
 /** Pure: classify a raw Slack message event into {kind,...} or null. `isEngaged(channel,thread)` is a callback.
  *  `dmOwner(channel)` returns the owner whose own 1:1 DM this is (captured via their user token), or null for Lekam's DMs. */
-export async function classifyEvent(ev, { botUserId, ownerIds, isEngaged, dmOwner = async () => null }) {
+export async function classifyEvent(ev, { botUserId, ownerIds, isEngaged, dmOwner = async () => null, nameOf = async (id) => id, appId = null }) {
   if (!ev || ev.type !== 'message' && ev.type !== 'app_mention') return null;
   if (ev.subtype && IGNORED_SUBTYPES.has(ev.subtype)) return null;
   if (ev.bot_id || ev.user === botUserId || !ev.user) return null;
+  // Posted by Lekam itself with an owner's user token: never read back as the owner talking.
+  if (appId && ev.app_id === appId) return null;
   const text = ev.text ?? '';
+  if (!stripMentions(text)) return null; // nothing but tags
   const channel = ev.channel;
   const ts = ev.ts;
   const thread_ts = ev.thread_ts ?? ev.ts;
-  const base = { channel, ts, thread_ts, user: ev.user, event_ts: ev.event_ts, raw_text: text, text: stripMentions(text), is_dm: ev.channel_type === 'im' };
+  const base = { channel, ts, thread_ts, user: ev.user, event_ts: ev.event_ts, raw_text: text, text: await renderMentions(text, nameOf, { drop: [botUserId] }), is_dm: ev.channel_type === 'im' };
+  // Posted through some other app with this person's user token (e.g. an agent's Slack tool posting as the owner):
+  // people typing in Slack get a client_msg_id, app posts get the app's id instead.
+  if (ev.app_id && !ev.client_msg_id) base.via_app = ev.app_id;
   if (!base.text) return null;
   if (base.is_dm) {
     // Someone DM'd an owner directly (not Lekam): treat it like tagging that owner. The owner's own messages are ignored.
@@ -42,7 +67,7 @@ export async function classifyEvent(ev, { botUserId, ownerIds, isEngaged, dmOwne
 export class SlackAdapter {
   constructor({ bot_token, app_token, ownerIds, userTokens = new Map(), captureDms = new Set(), ownerPostFooter = true, log = () => {} }) {
     this.captureDms = captureDms; this.dmOwners = new Map(); // channel -> owner id | null
-    this.ownerPostFooter = ownerPostFooter; this.appName = 'Lekam';
+    this.ownerPostFooter = ownerPostFooter; this.appName = 'Lekam'; this.appId = null;
     this.ownerIds = ownerIds; this.log = log; this.botUserId = null;
     this.tokens = { bot_token, app_token };
     this.userTokens = userTokens; this.userClients = new Map(); // owner id -> WebClient posting as that owner
@@ -63,7 +88,8 @@ export class SlackAdapter {
     const auth = await this.client.auth.test();
     this.botUserId = auth.user_id;
     // The Slack app's own name, for the "Sent using <app>" footer on posts as an owner.
-    try { this.appName = (await this.client.bots.info({ bot: auth.bot_id })).bot?.name || this.appName; } catch (e) { this.log('warn', `bots.info failed: ${e.message}`); }
+    // Its app id marks posts Lekam made with an owner's user token, so they are never read back as the owner.
+    try { const bot = (await this.client.bots.info({ bot: auth.bot_id })).bot; this.appName = bot?.name || this.appName; this.appId = bot?.app_id ?? null; } catch (e) { this.log('warn', `bots.info failed: ${e.message}`); }
     if (this.userTokens.size) {
       const { WebClient } = await import('@slack/web-api');
       for (const [id, token] of this.userTokens) {
@@ -79,7 +105,7 @@ export class SlackAdapter {
       const key = `${ev.channel}:${ev.ts}`;
       if (seen.has(key)) return; seen.add(key); setTimeout(() => seen.delete(key), 60_000);
       if (this.isEcho(ev)) return;
-      const msg = await classifyEvent(ev, { botUserId: this.botUserId, ownerIds: this.ownerIds, isEngaged: this.handlers.isEngaged, dmOwner: (c) => this.dmOwner(c) });
+      const msg = await classifyEvent(ev, { botUserId: this.botUserId, ownerIds: this.ownerIds, isEngaged: this.handlers.isEngaged, dmOwner: (c) => this.dmOwner(c), nameOf: (id) => this.userName(id), appId: this.appId });
       if (!msg) return;
       msg.event_id = event_id;
       try { await this.handlers.message?.(msg); } catch (e) { this.log('error', `message handler failed: ${e.stack ?? e}`); }
@@ -174,8 +200,10 @@ export class SlackAdapter {
   async fetchThread(channel, thread_ts, limit = 20) {
     try {
       const r = await this.withAccess((c) => c.conversations.replies({ channel, ts: thread_ts, limit: Math.min(limit, 100) }));
-      const msgs = (r.messages ?? []).filter((m) => !m.subtype || m.subtype === 'thread_broadcast').map((m) => ({ user: m.user ?? m.bot_id ?? '?', text: stripMentions(m.text ?? ''), ts: m.ts }));
-      return msgs.slice(-limit);
+      const msgs = (r.messages ?? []).filter((m) => !m.subtype || m.subtype === 'thread_broadcast').slice(-limit);
+      const out = [];
+      for (const m of msgs) out.push({ user: m.user ?? m.bot_id ?? '?', text: await renderMentions(m.text ?? '', (id) => this.userName(id)), ts: m.ts });
+      return out;
     } catch (e) { this.log('warn', `fetchThread failed: ${e.message}`); return []; }
   }
   async permalink(channel, ts) { try { return (await this.withAccess((c) => c.chat.getPermalink({ channel, message_ts: ts }))).permalink; } catch { return null; } }

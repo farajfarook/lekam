@@ -8,9 +8,10 @@ export const CLASSIFICATION_SCHEMA = {
   schema: {
     type: 'object',
     additionalProperties: false,
-    required: ['intent', 'actionable', 'confidence', 'urgent', 'reply_to_user', 'brief', 'followup', 'clarifying_question'],
+    required: ['intent', 'addressed_to_owner', 'actionable', 'confidence', 'urgent', 'reply_to_user', 'brief', 'followup', 'clarifying_question'],
     properties: {
       intent: { type: 'string', enum: INTENTS },
+      addressed_to_owner: { type: 'boolean', description: 'true when the message asks something of the owner, their team, Lekam or the agents; false when it only mentions the owner while talking to someone else' },
       actionable: { type: 'boolean', description: 'true when an agent with tools could usefully act on this' },
       confidence: { type: 'number', minimum: 0, maximum: 1 },
       urgent: { type: 'boolean' },

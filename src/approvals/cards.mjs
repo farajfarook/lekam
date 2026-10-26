@@ -53,7 +53,8 @@ function briefBlocks({ request, config, selected, permalink, channelName }) {
   const proposed = selected ?? b.outward_actions ?? [];
   const mode = config.approvals?.outward_actions_mode ?? 'ask';
   if (mode === 'all') {
-    // nothing to show: every outward action is allowed
+    // Every outward action is granted on approval: say so, the owner approves exactly what will run.
+    if (ids.length) blocks.push(ctx(':warning: May take *any* outward action: ' + ids.map((id) => config.outward_actions[id] ?? id).join(', ')));
   } else if (mode === 'proposed') {
     if (proposed.length) blocks.push(ctx('May: ' + proposed.map((id) => config.outward_actions[id] ?? id).join(', ')));
   } else if (ids.length && proposed.length === 0) {

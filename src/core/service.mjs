@@ -14,6 +14,7 @@ export class Service {
     this.catalogue = buildCatalogue(config, { log });
     this.timers = [];
     this.reactionChains = new Map();
+    this.turns = new Map(); // request id -> tail of its agent-turn queue
   }
 
   async start() {
@@ -100,8 +101,16 @@ export class Service {
   nudge(r) { return this.ownerOwnDm(r) ? '' : `<@${r.owner}> `; }
   toOwner(r, msg) { return this.chat.dm(r.owner, msg, this.sessionThread(r)); }
 
-  /** Post in a channel thread and remember that Lekam spoke there (keeps the thread engaged). */
-  async post(channel, thread_ts, msg, opts = {}) { const r = await this.chat.post(channel, thread_ts, msg, opts); this.store.touchThread(channel, thread_ts); return r; }
+  /** Post in a channel thread and remember that Lekam spoke there (keeps the thread engaged). Posts made as the owner
+   *  don't count: people replying to them are talking to the owner, not to Lekam. */
+  async post(channel, thread_ts, msg, opts = {}) { const r = await this.chat.post(channel, thread_ts, msg, opts); if (!r?.as) this.store.touchThread(channel, thread_ts); return r; }
+  /** One agent turn at a time per request: overlapping sends to the same session resolve on the same last message. */
+  serial(id, fn) {
+    const next = (this.turns.get(id) ?? Promise.resolve()).catch(() => {}).then(fn);
+    this.turns.set(id, next);
+    next.catch(() => {}).then(() => { if (this.turns.get(id) === next) this.turns.delete(id); });
+    return next;
+  }
   async updateCard(request, msg) { if (request.card) await this.chat.update(request.card.channel, request.card.ts, msg); }
   async classify(msg, { request = null, ownerId, thread = null } = {}) {
     try {
@@ -128,6 +137,12 @@ export class Service {
   // ---------- inbound messages ----------
   async onMessage(msg) {
     if (this.store.seen(msg.event_id)) { this.store.audit('duplicate_event', null, msg.user, { event_id: msg.event_id }); return; }
+    if (!msg.is_dm && this.config.ownerIds.has(msg.user)) {
+      // Something posted as the owner through another app (an agent's Slack tool, say): not the owner typing. Never act on it.
+      if (msg.via_app) return this.onPostedAsOwner(msg);
+      // In the channel the owner is talking to people. Lekam only listens when tagged; steering happens in the DM session thread.
+      if (msg.kind === 'followup') { this.store.audit('owner_untagged_ignored', this.store.findByThread(msg.channel, msg.thread_ts)?.id ?? null, msg.user, { channel: msg.channel }); return; }
+    }
     // Owner replying in a session thread (DM): talk to that request's agent.
     if (msg.is_dm && this.config.ownerIds.has(msg.user) && msg.thread_ts !== msg.ts) {
       const r = this.store.findByCard(msg.channel, msg.thread_ts);
@@ -143,6 +158,15 @@ export class Service {
     return this.onNew(msg);
   }
 
+  /** A post as the owner that Lekam didn't make. In a request thread, tell the owner: it skipped the Post step. */
+  async onPostedAsOwner(msg) {
+    const r = this.store.findByThread(msg.channel, msg.thread_ts);
+    this.store.audit('owner_post_via_other_app', r?.id ?? null, msg.user, { channel: msg.channel, ts: msg.ts, app: msg.via_app });
+    if (!r?.card || r.owner !== msg.user) return;
+    const link = await this.chat.permalink(msg.channel, msg.ts);
+    await this.toOwner(r, `${this.nudge(r)}Something was posted as you in this request's thread by another app, not through Lekam${link ? ` (<${link}|view>)` : ''}. If it was the agent, it skipped your Post step. I haven't acted on it.`).catch(() => {});
+  }
+
   async onNew(msg) {
     const owner = msg.kind === 'owner_mention' ? ownerById(this.config, msg.owner) : ownerForChannel(this.config, msg.channel);
     if (!owner) return;
@@ -155,7 +179,8 @@ export class Service {
     }
     const thread = await this.chat.fetchThread(msg.channel, msg.thread_ts, this.config.brain.thread_context_messages);
     const cls = await this.classify(msg, { ownerId: owner.slack_id, thread });
-    if (cls) cls.thread_excerpt = thread.filter((m) => m.ts !== msg.ts && m.user !== this.chat.botUserId).slice(-4);
+    // Kept for the card (last two) and the agent's brief (all of it): who asked whom matters.
+    if (cls) cls.thread_excerpt = thread.filter((m) => m.ts !== msg.ts && m.user !== this.chat.botUserId).slice(-8);
     const d = decideNew(msg, cls, this.config);
     this.store.audit('decision', null, msg.user, { kind: msg.kind, decision: d.type, reason: d.reason ?? null, intent: cls?.intent ?? null, confidence: cls?.confidence ?? null });
     switch (d.type) {
@@ -173,10 +198,10 @@ export class Service {
   /** Stand-in classification when the brain is down: the owner sees the raw request and decides. */
   unreadCls(msg, thread) {
     return {
-      intent: 'task_request', actionable: true, confidence: 0, urgent: false, brain_unavailable: true, followup: null, clarifying_question: null,
+      intent: 'task_request', addressed_to_owner: true, actionable: true, confidence: 0, urgent: false, brain_unavailable: true, followup: null, clarifying_question: null,
       reply_to_user: msg.kind === 'bot_mention' ? `I've passed this to ${ownerForChannel(this.config, msg.channel)?.name ?? 'the owner'}; I'll post back here.` : null,
       brief: { summary: msg.text.slice(0, 300), skill: null, repo: null, outward_actions: [], notes: 'Not pre-read: the brain was unavailable. Read the thread for context.' },
-      thread_excerpt: thread.filter((m) => m.ts !== msg.ts && m.user !== this.chat.botUserId).slice(-4),
+      thread_excerpt: thread.filter((m) => m.ts !== msg.ts && m.user !== this.chat.botUserId).slice(-8),
     };
   }
 
@@ -235,7 +260,8 @@ export class Service {
   }
 
   /** ownerTurn: the owner is talking to the agent (DM session thread or the channel thread) - show the agent's answer to them as-is. */
-  async forward(request, text, msg, { owner = false, ownerTurn = false, fromName = null } = {}) {
+  async forward(request, text, msg, opts = {}) { return this.serial(request.id, () => this.forwardTurn(this.store.getRequest(request.id) ?? request, text, msg, opts)); }
+  async forwardTurn(request, text, msg, { owner = false, ownerTurn = false, fromName = null } = {}) {
     // The owner may keep talking to a session after its result was posted or discarded.
     const ok = ['RUNNING', 'DONE', 'APPROVED', 'INVESTIGATING', ...(owner ? ['RELEASED', 'DISCARDED'] : [])];
     if (!ok.includes(request.state)) return;
@@ -248,7 +274,7 @@ export class Service {
     try {
       if (!(await exec.alive(request))) {
         const args = await this.cardArgs(request);
-        const { sessionId, result } = await exec.start({ request, brief: request.brief, allowed: request.scope?.outward_actions ?? [], permalink: args.permalink, requesterName: args.requesterName, previousOutcome: request.outcome, onStarted: (id) => this.store.setSession(request.id, id) });
+        const { sessionId, result } = await exec.start({ request, brief: request.brief, allowed: request.scope?.outward_actions ?? [], permalink: args.permalink, requesterName: args.requesterName, channelName: args.channelName, thread: args.excerpt, previousOutcome: request.outcome, onStarted: (id) => this.store.setSession(request.id, id) });
         this.store.audit('session_handoff', request.id, msg?.user ?? null, { session: sessionId, handoff_status: result.status });
         // The handoff turn only restores context; the answer that matters is the reply to this message.
         const { result: reply } = await exec.send({ request: this.store.getRequest(request.id), text });
@@ -260,7 +286,8 @@ export class Service {
     } catch (e) { this.log('error', `forward failed: ${e.message}`); this.store.audit('forward_failed', request.id, null, { message: e.message }); await this.toOwner(request, `Couldn't reach the agent: ${e.message}`).catch(() => {}); }
   }
 
-  async pipeToSession(request, msg) {
+  async pipeToSession(request, msg) { return this.serial(request.id, () => this.pipeTurn(request, msg)); }
+  async pipeTurn(request, msg) {
     try {
       const { result } = await this.exec(request.owner).send({ request, text: this.agentText(request, msg.text, { ownerTurn: true }) });
       await this.toOwner(request, result.text || `(agent finished with status ${result.status})`);
@@ -390,7 +417,7 @@ export class Service {
     const args = await this.cardArgs(request);
     try {
       const { result } = await exec.start({
-        request, brief: request.scope.brief, allowed: request.scope.outward_actions, permalink: args.permalink, requesterName: args.requesterName,
+        request, brief: request.scope.brief, allowed: request.scope.outward_actions, permalink: args.permalink, requesterName: args.requesterName, channelName: args.channelName, thread: args.excerpt,
         onQueued: (n) => this.updateCard(request, actionedCard(args, `Queued (${n} ahead)`)).catch(() => {}),
         onStarted: async (id) => {
           this.store.setSession(request.id, id);
@@ -410,7 +437,7 @@ export class Service {
     const exec = this.exec(request.owner);
     const args = await this.cardArgs(request);
     try {
-      const { sessionId, result } = await exec.startInvestigation({ request, brief: request.brief, permalink: args.permalink, requesterName: args.requesterName, onStarted: async (id) => { this.store.setSession(request.id, id); await this.updateCard(request, investigatingCard({ ...args, request: this.store.getRequest(request.id) }, { agentLink: exec.agentLink(id) })); } });
+      const { sessionId, result } = await exec.startInvestigation({ request, brief: request.brief, permalink: args.permalink, requesterName: args.requesterName, channelName: args.channelName, thread: args.excerpt, onStarted: async (id) => { this.store.setSession(request.id, id); await this.updateCard(request, investigatingCard({ ...args, request: this.store.getRequest(request.id) }, { agentLink: exec.agentLink(id) })); } });
       this.store.audit('investigation_plan', request.id, null, { session: sessionId, status: result.status });
       await this.toOwner(request, this.nudge(request) + (result.text || `(agent stopped with status ${result.status}${result.error ? ': ' + result.error : ''})`));
     } catch (e) { this.log('error', `investigate failed: ${e.message}`); await this.toOwner(request, `Investigation failed: ${e.message}`); }

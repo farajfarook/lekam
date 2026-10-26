@@ -27,11 +27,12 @@ Slack ──Socket Mode──▶ lekam ──▶ brain (LLM, JSON only, no tools
 | Someone… | Lekam… |
 |---|---|
 | mentions `@Lekam` with a task or a question that needs live data | reacts 👀, sends the owner a card (verbatim request, proposed brief, skill, repo, outward-action checkboxes). Buttons: Approve task · Approve once · Discuss first · Edit brief · Decline |
-| tags **the owner** with a task or a question that needs tools ("what did your team do today?"). The owner can tag themselves too: never dropped for low confidence, and the answer goes out as the owner | stays silent in the channel; DMs the owner: Delegate · Delegate (no outward actions) · Discuss first · Edit brief · Ignore. Only after Delegate does it speak in the thread |
-| replies in a thread Lekam is working on | forwards in-scope follow-ups to the same agent session; cards scope changes |
+| tags **the owner** with a task or a question that needs tools ("what did your team do today?"). The owner can tag themselves too: never dropped for low confidence, and the answer goes out as the owner. A tag is not an ask: "@Faraj & I tried" in a thread asking someone else is ignored | stays silent in the channel; DMs the owner: Delegate · Delegate (no outward actions) · Discuss first · Edit brief · Ignore. Only after Delegate does it speak in the thread |
+| replies in a thread Lekam is working on | forwards in-scope follow-ups to the same agent session; cards scope changes. In a thread where someone asked the owner, Lekam never chimes in as itself |
+| is the owner, replying in the channel thread | nothing, unless they tag Lekam: in the channel the owner is talking to people. Steer the agent in the DM thread |
 | asks something that needs no agent | answers briefly in persona, or stays quiet |
 
-**One thread per request.** In your DMs, everything about a request lives in one thread: under the approval card, or under your own message when you DM Lekam yourself. That includes follow-up cards, the Discuss-first chat, results, failures and your replies to the agent. Reply in that thread to keep talking to the same agent, even after the result was posted. Your messages reach the agent marked as coming from you (a per-request token only Lekam can produce), so they are authoritative: "approve it" or "go" is the confirmation a skill waits for, and you can allow actions the brief didn't list. Anyone else's follow-ups are marked untrusted. The agent's answers to you appear as-is; press **Draft reply as Faraj** (or **Post to thread** for Lekam's own threads) to turn the latest one into a thread reply, which you see exactly before posting. Older result cards stop working once there is a newer answer. When you DM Lekam yourself, the report is simply the reply in your thread; there is no Post step, because nobody else is in that conversation.
+**One thread per request.** In your DMs, everything about a request lives in one thread: under the approval card, or under your own message when you DM Lekam yourself. That includes follow-up cards, the Discuss-first chat, results, failures and your replies to the agent. Reply in that thread to keep talking to the same agent, even after the result was posted. Your messages reach the agent marked as coming from you (a per-request token only Lekam can produce), so they are authoritative: "approve it" or "go" is the confirmation a skill waits for, and you can allow actions the brief didn't list. Anyone else's follow-ups are marked untrusted, and so is the thread history the agent gets with its brief (so it can see who asked whom). The agent never posts its own reply: if something is posted as you in the request thread by another app (an agent's Slack tool), Lekam tells you and ignores it. One agent turn runs at a time per request. The agent's answers to you appear as-is; press **Draft reply as Faraj** (or **Post to thread** for Lekam's own threads) to turn the latest one into a thread reply, which you see exactly before posting. Older result cards stop working once there is a newer answer. When you DM Lekam yourself, the report is simply the reply in your thread; there is no Post step, because nobody else is in that conversation.
 
 **Discuss first** starts the agent in investigate-only mode (read, reproduce, propose; change nothing). You chat with it in the card's DM thread or in the Paseo app, then press **Proceed** (same session, keeps its context) or **Drop**.
 
@@ -48,7 +49,7 @@ cp config/persona.md config/guardrails.md .     # edit to taste
 ```
 
 1. **Slack app**: create one from `config/slack-manifest.yml` (api.slack.com → Create app → From manifest). Install to the workspace. Copy the bot token (`xoxb-…`) and create an app-level token with `connections:write` (`xapp-…`).
-2. **Brain key**: a budget-capped key on your LiteLLM/OpenAI endpoint. A small fast model is plenty (Claude Haiku class).
+2. **Brain key**: a budget-capped key on your LiteLLM/OpenAI endpoint. A Sonnet-class model is recommended: the brain has to read who each thread message is addressed to, and it also writes the owner-voice rewrite.
 3. **Environment** (never in files):
    ```bash
    export LEKAM_SLACK_BOT_TOKEN=xoxb-…
@@ -74,7 +75,7 @@ Everything personal lives in `lekam.yml`, `persona.md` (the bot's voice) and `gu
 
 - `owners[]` — one or more. Each has a Slack id, the channels it is default for, and its own executor (`paseo_url`, `provider/model`, `cwd`, `max_concurrent`, `run_timeout`, `workspace_label`). Every session Lekam creates is put under the Paseo workspace label `workspace_label` (default `Lekam`): an existing label with that name is reused with its colour, otherwise it is created (`workspace_label_color`, default amber). Set `workspace_label: null` to turn it off.
 - `brain` — endpoint, models (`classify_model`, optional stronger `brief_model`), `threshold` (owner-mentions below it never card), context sizes.
-- `approvals` — TTLs per kind (expiry = deny), `force_card_patterns`, `outward_actions_mode`.
+- `approvals` — TTLs per kind (expiry = deny), `force_card_patterns`, `outward_actions_mode` (`ask` checkboxes, `proposed` the brief's actions, `all` everything; the card always shows what will be granted).
 - `outward_actions` — the ids the brain may propose and you approve per request.
 - `people_file` / `people` — who to @-tag in posted results (a JSON roster like `{members:[{name, slackId, github}]}`, or inline `{name, slack_id, github, aliases}`). Names, GitHub logins and the owner-voice rewrite's references become Slack mentions; the owner is never tagged.
 - `agent_tools` — plain-text list of live data sources your agents can reach (HR, Jira, CI…). Without it the brain may shrug at questions like "any leave plans?" instead of carding them.

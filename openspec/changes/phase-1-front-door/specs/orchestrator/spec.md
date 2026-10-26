@@ -20,7 +20,7 @@ The brain SHALL request `response_format: { type: "json_schema", strict: true }`
 - **THEN** the brain returns a `brain_error` and core replies that it could not understand, with no card
 
 ### Requirement: Classification shape
-The Classification SHALL contain: `intent` (task_request | question | fyi | chitchat | needs_clarification), `actionable` (bool), `confidence` (0–1), `urgent` (bool), `reply_to_user` (string|null), `brief` ({ summary, skill|null, repo|null, outward_actions[], notes }), `followup` (in_scope | scope_change | not_for_agent | null), `clarifying_question` (string|null).
+The Classification SHALL contain: `intent` (task_request | question | fyi | chitchat | needs_clarification), `addressed_to_owner` (bool: the message asks something of the owner, their team, Lekam or the agents, rather than only mentioning the owner while talking to someone else), `actionable` (bool), `confidence` (0–1), `urgent` (bool), `reply_to_user` (string|null), `brief` ({ summary, skill|null, repo|null, outward_actions[], notes }), `followup` (in_scope | scope_change | not_for_agent | null), `clarifying_question` (string|null).
 
 #### Scenario: classification shape
 - **WHEN** the endpoint returns an object missing `confidence`
@@ -41,11 +41,15 @@ The system prompt SHALL begin with the contents of `persona.md`. The shipped def
 - **THEN** the system prompt begins with the exact contents of `persona.md`
 
 ### Requirement: Confidence threshold
-Config `brain.threshold` (default 0.7) SHALL be applied by core: an `owner_mention` becomes a card only if `intent` is `task_request` or `question`, `actionable`, and `confidence >= threshold`. A `bot_mention` with `intent = task_request`, or an actionable `question` (one that needs tools or live data to answer), SHALL always become a card, flagged "low confidence" when below threshold.
+Config `brain.threshold` (default 0.7) SHALL be applied by core: an `owner_mention` becomes a card only if `addressed_to_owner` is not false, `intent` is `task_request` or `question`, `actionable`, and `confidence >= threshold`. Self-tags and captured DMs are addressed to the owner by definition. A `bot_mention` with `intent = task_request`, or an actionable `question` (one that needs tools or live data to answer), SHALL always become a card, flagged "low confidence" when below threshold.
 
 #### Scenario: confidence threshold
 - **WHEN** an owner_mention is classified actionable with confidence 0.6 and threshold is 0.7
 - **THEN** no card is sent and an audit row `below_threshold` is written
+
+#### Scenario: a tag is not an ask
+- **WHEN** Markand posts "@Preethi need your help converting OP-316" and then, in the same thread, "@Faraj & I tried, but looks like we dont have access"
+- **THEN** the brain returns `addressed_to_owner: false`, no card is sent and an audit row `not_addressed_to_owner` is written
 
 #### Scenario: actionable question to the owner
 - **WHEN** an owner_mention "what did your team do today" is classified `question`, actionable, confidence 0.85
