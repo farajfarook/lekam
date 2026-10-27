@@ -21,7 +21,7 @@
 ## 4. Docs and verification
 
 - [x] 4.1 README watches section rewritten (no hook; what Lekam needs: channel membership, `capture_dms` for DMs, daemon targets); `config/lekam.example.yml` `watches.detect` and host targets — reviewed in the diff
-- [ ] 4.2 Live smoke: a throwaway session on each host posts a tagged message in a test thread; `lekam watches` shows a detected watch within ~20 s; a reply cards; Forward lands in the session (local and SSH) — recorded in this change's tasks notes
+- [x] 4.2 Live smoke: a throwaway session on each host posts a tagged message in a test thread; `lekam watches` shows a detected watch within ~20 s; a reply cards; Forward lands in the session (local and SSH) — recorded in this change's tasks notes
 
 ## Workflow follow-up
 
