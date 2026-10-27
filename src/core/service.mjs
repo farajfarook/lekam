@@ -135,7 +135,7 @@ export class Service {
       thread ??= await this.chat.fetchThread(msg.channel, msg.thread_ts, this.config.brain.thread_context_messages);
       // The brain sees names, never ids.
       const named = [];
-      for (const m of thread) named.push({ user: m.user === this.chat.botUserId ? 'Lekam' : await this.chat.userName(m.user), text: m.text, ts: m.ts });
+      for (const m of thread) named.push({ user: m.user === this.chat.botUserId ? (this.chat.appName ?? 'Lekam') : await this.chat.userName(m.user), text: m.text, ts: m.ts });
       const channelName = await this.chat.channelName(msg.channel);
       const cls = await this.brain.classify(
         { kind: msg.kind, requester: await this.chat.userName(msg.user), channel: channelName ? '#' + channelName : msg.dm ? `a direct message to ${this.ownerName(ownerId)}` : 'a direct message', text: msg.text, thread: named, approvedScope: request?.scope ?? null },
@@ -553,7 +553,7 @@ export class Service {
     try {
       const thread = await this.chat.fetchThread(msg.channel, watch.is_dm ? msg.thread_ts : watch.thread_ts, this.config.brain.thread_context_messages);
       const named = [];
-      for (const m of thread) named.push({ user: m.user === this.chat.botUserId ? 'Lekam' : await this.chat.userName(m.user), text: m.text, ts: m.ts });
+      for (const m of thread) named.push({ user: m.user === this.chat.botUserId ? (this.chat.appName ?? 'Lekam') : await this.chat.userName(m.user), text: m.text, ts: m.ts });
       const channelName = await this.chat.channelName(msg.channel);
       return await this.brain.classify(
         { kind: 'watch_reply', requester: await this.chat.userName(msg.user), channel: channelName ? '#' + channelName : `a direct message to ${this.ownerName(watch.owner)}`, text: msg.text, thread: named, watchedSession: watch.title || 'an agent session' },

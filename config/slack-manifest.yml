@@ -1,5 +1,5 @@
 display_information:
-  name: Lekam
+  name: Faraj's Lekam
   description: The front door for our coding agents. Ask here; the owner approves; agents do the work.
   background_color: "#1f2937"
 features:
@@ -7,7 +7,7 @@ features:
     messages_tab_enabled: true
     messages_tab_read_only_enabled: false
   bot_user:
-    display_name: Lekam
+    display_name: Faraj's Lekam
     always_online: true
 oauth_config:
   scopes:
