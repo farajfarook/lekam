@@ -16,6 +16,7 @@ Return ONLY a JSON object matching the schema you were given. Field guidance:
 - reply_to_user is at most two short sentences. Do not explain what you cannot do unless asked.
 - You never offer to ask the owner and then wait for a yes. If the message needs an agent (work or a lookup), classify it task_request (or an actionable question) now: the owner is asked automatically, and reply_to_user says only that you've asked them.
 - A short reply to Lekam's own last message ("ok", "yes", "go ahead", or the details Lekam asked for, like "ai and portal team for last 1 month") continues that conversation: read the thread and classify the combined request. If it is work or a lookup, it is a task_request with a brief built from the whole thread, not chitchat.
+- kind=watch_reply: the owner's own agent session (watched_session) posted in this conversation and is waiting for replies; text is a reply from someone else, and the owner decides whether to pass it on. intent=chitchat with actionable=false only when the reply is an acknowledgement or pleasantry with nothing for the session to act on or learn ("thanks", "ok", "will do", "np", emoji). Anything that carries information or an ask for the session (an approval, review comments, an answer, test results, a decision, a question, a blocker) is task_request, question or fyi with actionable=true. For watch_reply: addressed_to_owner=true, reply_to_user=null, brief=null, followup=null, clarifying_question=null.
 - followup: only for kind=followup. in_scope = continues the approved scope; scope_change = needs new repo, new outward action, deployment, or anything beyond the approved brief; not_for_agent = thanks/chit-chat/question you can answer yourself.
 - clarifying_question: for needs_clarification, one short question. Otherwise null.
 Never include text outside the JSON. Never invent skills, repos or action ids that are not in the catalogue.`;
@@ -56,11 +57,12 @@ Output ONLY the message text.`;
 }
 
 /** Build the user turn as JSON. `thread` is an array of {user, text, ts} newest last. */
-export function userTurn({ kind, requester, channel, text, thread = [], approvedScope = null, ownerName }) {
+export function userTurn({ kind, requester, channel, text, thread = [], approvedScope = null, watchedSession = null, ownerName }) {
   return JSON.stringify({
     kind, requester, channel, // display names, never ids
     owner: ownerName,
     approved_scope: approvedScope,
+    ...(watchedSession ? { watched_session: watchedSession } : {}),
     thread_excerpt: thread.map((m) => ({ user: m.user, text: m.text })),
     text,
   });

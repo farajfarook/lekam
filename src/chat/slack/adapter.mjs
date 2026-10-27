@@ -206,6 +206,26 @@ export class SlackAdapter {
       return out;
     } catch (e) { this.log('warn', `fetchThread failed: ${e.message}`); return []; }
   }
+  /**
+   * Messages newer than `oldest` in a thread (`thread_ts`) or a whole conversation (DMs), oldest first, for watch
+   * catch-up. Unlike fetchThread, errors are thrown: the caller needs to know when Lekam can't read a conversation.
+   */
+  async readSince(channel, { thread_ts = null, oldest }) {
+    const out = [];
+    let cursor;
+    for (let page = 0; page < 5; page++) {
+      const r = await this.withAccess((c) => (thread_ts
+        ? c.conversations.replies({ channel, ts: thread_ts, oldest, limit: 200, ...(cursor ? { cursor } : {}) })
+        : c.conversations.history({ channel, oldest, limit: 200, ...(cursor ? { cursor } : {}) })));
+      for (const m of r.messages ?? []) {
+        out.push({ ts: m.ts, thread_ts: m.thread_ts ?? null, user: m.user ?? null, bot_id: m.bot_id ?? null, app_id: m.app_id ?? null, subtype: m.subtype ?? null, raw_text: m.text ?? '',
+          text: await renderMentions(m.text ?? '', (id) => this.userName(id), { drop: this.botUserId ? [this.botUserId] : [] }) });
+      }
+      cursor = r.response_metadata?.next_cursor;
+      if (!cursor) break;
+    }
+    return out.sort((a, b) => Number(a.ts) - Number(b.ts));
+  }
   async permalink(channel, ts) { try { return (await this.withAccess((c) => c.chat.getPermalink({ channel, message_ts: ts }))).permalink; } catch { return null; } }
   async userName(id) {
     if (this.userNames.has(id)) return this.userNames.get(id);

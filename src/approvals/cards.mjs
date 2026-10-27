@@ -16,7 +16,11 @@ export const ACTIONS = Object.freeze({
   DISCARD_RESULT: 'lekam_discard_result',
   OUTWARD_SELECT: 'lekam_outward_select',
   DRAFT_REPLY: 'lekam_draft_reply',
+  WATCH_FORWARD: 'lekam_watch_forward',
+  WATCH_IGNORE: 'lekam_watch_ignore',
+  WATCH_STOP: 'lekam_watch_stop',
 });
+export const WATCH_ACTIONS = Object.freeze(new Set([ACTIONS.WATCH_FORWARD, ACTIONS.WATCH_IGNORE, ACTIONS.WATCH_STOP]));
 export const EDIT_VIEW_ID = 'lekam_edit_brief';
 
 const md = (text) => ({ type: 'section', text: { type: 'mrkdwn', text } });
@@ -129,6 +133,25 @@ export function agentReplyCard({ request, text, version, postAs = null, drafted 
   if (drafted) blocks.push(ctx('_Draft below_'));
   else blocks.push({ type: 'actions', block_id: 'lekam_agent_reply', elements: [postAs ? btn(`Draft reply as ${postAs}`, ACTIONS.DRAFT_REPLY, v) : btn('Post to thread', ACTIONS.POST_RESULT, v)] });
   return { text: trunc(text || '(empty)', 150), blocks };
+}
+
+/**
+ * Replies in a watched conversation, waiting for the owner. `replies` = [{ name, text, link }], oldest first.
+ * `outcome` (a line of mrkdwn) replaces the buttons once the card has been actioned; `note` is shown above the buttons.
+ */
+export function watchCard({ watch, batch, replies, where, permalink = null, host = null, agentLink = null, mention = '', outcome = null, note = null }) {
+  const session = `*${trunc(watch.title || 'agent session', 80)}*${host ? ` on ${host}` : ''}${agentLink ? ` · <${agentLink}|open in Paseo>` : ''}`;
+  const who = [...new Set(replies.map((r) => r.name))].join(', ');
+  const blocks = [ctx(`${mention}${replies.length === 1 ? 'Reply' : `${replies.length} replies`} in ${permalink ? `<${permalink}|${where}>` : where} · waiting: ${session}`)];
+  // Section blocks are capped at 3000 chars and a message at 50 blocks: keep the newest replies if there are many.
+  const shown = replies.slice(-40);
+  if (shown.length < replies.length) blocks.push(ctx(`_${replies.length - shown.length} earlier replies not shown_`));
+  for (const r of shown) blocks.push(md(`*${r.name}*${r.link ? ` · <${r.link}|view>` : ''}\n${quote(trunc(r.text || '(no text)', 1200))}`));
+  const v = `${watch.id}|${batch}`;
+  if (note) blocks.push(ctx(note));
+  if (outcome) blocks.push(ctx(outcome));
+  else blocks.push({ type: 'actions', block_id: 'lekam_watch', elements: [btn('Forward to session', ACTIONS.WATCH_FORWARD, v, 'primary'), btn('Ignore', ACTIONS.WATCH_IGNORE, v), btn('Stop watching', ACTIONS.WATCH_STOP, v, 'danger')] });
+  return { text: `${who} replied: ${trunc(replies[replies.length - 1]?.text ?? '', 120)}`, unfurl_links: false, unfurl_media: false, blocks };
 }
 
 /** Modal for Edit brief. */

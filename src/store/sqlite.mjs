@@ -26,7 +26,21 @@ const MIGRATIONS = [
    CREATE TABLE IF NOT EXISTS rate (requester TEXT NOT NULL, at INTEGER NOT NULL);
    CREATE INDEX IF NOT EXISTS rate_req ON rate(requester, at);`,
   `CREATE TABLE IF NOT EXISTS threads (channel TEXT NOT NULL, thread_ts TEXT NOT NULL, last_bot_post_at INTEGER NOT NULL, PRIMARY KEY(channel, thread_ts));`,
+  // Thread watches: an agent session Lekam didn't start is waiting on replies in a thread (or a DM).
+  `CREATE TABLE IF NOT EXISTS watches (
+     id TEXT PRIMARY KEY, channel TEXT NOT NULL, thread_ts TEXT NOT NULL, is_dm INTEGER NOT NULL DEFAULT 0,
+     owner TEXT NOT NULL, agent_id TEXT NOT NULL, host TEXT NOT NULL, title TEXT, state TEXT NOT NULL,
+     last_seen_ts TEXT NOT NULL, checked_at INTEGER, card TEXT, pending_card TEXT,
+     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER NOT NULL);
+   CREATE INDEX IF NOT EXISTS watches_conv ON watches(channel, thread_ts, state);
+   CREATE TABLE IF NOT EXISTS watch_replies (
+     id TEXT PRIMARY KEY, watch_id TEXT NOT NULL, ts TEXT NOT NULL, user TEXT NOT NULL, text TEXT NOT NULL,
+     state TEXT NOT NULL, batch TEXT, created_at INTEGER NOT NULL, UNIQUE(watch_id, ts));`,
 ];
+
+const rowToWatch = (r) => (r ? { ...r, is_dm: !!r.is_dm, card: P(r.card), pending_card: P(r.pending_card) } : null);
+/** Slack timestamps compare as numbers ("1792991756.332749"). */
+const tsMax = (a, b) => (!a ? b : !b ? a : Number(b) > Number(a) ? b : a);
 
 const J = (v) => (v === null || v === undefined ? null : JSON.stringify(v));
 const P = (s) => (s === null || s === undefined ? null : JSON.parse(s));
@@ -40,7 +54,8 @@ export class Store {
   constructor(file, { redact = [] } = {}) {
     if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
     this.db = new DatabaseSync(file);
-    this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;');
+    // busy_timeout: `lekam watch` (another process) writes to the same database while the service runs.
+    this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
     this.redact = redact.filter((s) => typeof s === 'string' && s.length >= 8);
     this.migrate();
   }
@@ -144,6 +159,86 @@ export class Store {
   botSpokeRecently(channel, thread_ts, { withinMs = 24 * 36e5, now = Date.now() } = {}) {
     const r = this.db.prepare(`SELECT last_bot_post_at FROM threads WHERE channel=? AND thread_ts=?`).get(channel, thread_ts);
     return !!r && now - r.last_bot_post_at < withinMs;
+  }
+
+  // ---- thread watches ----
+  /**
+   * Register (or renew) a watch. One active watch per conversation: the same agent renews it (keeping last_seen_ts,
+   * so catch-up never skips a reply missed live); another agent supersedes it. `renewOnly` renews an existing watch
+   * for this conversation and agent and otherwise does nothing. Returns { action, watch }.
+   */
+  registerWatch({ channel, thread_ts, agent_id, host, owner, title = null, message_ts = null, ttlMs, renewOnly = false, now = Date.now() }) {
+    const is_dm = String(channel).startsWith('D');
+    const current = this.activeWatchFor(channel, thread_ts, { now });
+    const expires_at = now + ttlMs;
+    if (current && current.agent_id === agent_id) {
+      this.db.prepare(`UPDATE watches SET expires_at=?, updated_at=?, title=COALESCE(?, title), host=? WHERE id=?`).run(expires_at, now, title, host, current.id);
+      this.audit('watch_renewed', null, owner, { watch: current.id, agent: agent_id, host });
+      return { action: 'renewed', watch: this.getWatch(current.id) };
+    }
+    if (renewOnly) return { action: 'noop', watch: null };
+    if (current) {
+      this.db.prepare(`UPDATE watches SET state='superseded', updated_at=? WHERE id=?`).run(now, current.id);
+      this.audit('watch_superseded', null, owner, { watch: current.id, by_agent: agent_id });
+    }
+    const id = 'w' + crypto.randomBytes(5).toString('hex');
+    this.db.prepare(`INSERT INTO watches(id,channel,thread_ts,is_dm,owner,agent_id,host,title,state,last_seen_ts,checked_at,card,pending_card,created_at,updated_at,expires_at)
+      VALUES(?,?,?,?,?,?,?,?,'active',?,NULL,NULL,NULL,?,?,?)`).run(id, channel, thread_ts, is_dm ? 1 : 0, owner, agent_id, host, title, tsMax(thread_ts, message_ts), now, now, expires_at);
+    this.audit('watch_registered', null, owner, { watch: id, channel, thread_ts, agent: agent_id, host, replaced: current?.id ?? null });
+    return { action: current ? 'replaced' : 'created', watch: this.getWatch(id) };
+  }
+  /** The Lekam request whose agent session this is, if any. */
+  requestBySession(session_id) { return rowToRequest(this.db.prepare(`SELECT * FROM requests WHERE session_id=? ORDER BY created_at DESC LIMIT 1`).get(session_id)); }
+  getWatch(id) { return rowToWatch(this.db.prepare(`SELECT * FROM watches WHERE id=?`).get(id)); }
+  /** The active watch for a channel thread, or for a DM conversation (DM replies are rarely threaded: any thread matches). */
+  activeWatchFor(channel, thread_ts, { now = Date.now() } = {}) {
+    return rowToWatch(this.db.prepare(`SELECT * FROM watches WHERE state='active' AND expires_at>? AND channel=? AND (is_dm=1 OR thread_ts=?) ORDER BY updated_at DESC LIMIT 1`).get(now, channel, thread_ts));
+  }
+  listWatches({ states = ['active'] } = {}) {
+    const q = states.map(() => '?').join(',');
+    return this.db.prepare(`SELECT * FROM watches WHERE state IN (${q}) ORDER BY updated_at DESC`).all(...states).map(rowToWatch);
+  }
+  updateWatch(id, fields) {
+    const cols = [], vals = [];
+    for (const [k, v] of Object.entries(fields)) { cols.push(`${k}=?`); vals.push(['card', 'pending_card'].includes(k) ? J(v) : k === 'is_dm' ? (v ? 1 : 0) : v); }
+    cols.push('updated_at=?'); vals.push(Date.now()); vals.push(id);
+    this.db.prepare(`UPDATE watches SET ${cols.join(',')} WHERE id=?`).run(...vals);
+    return this.getWatch(id);
+  }
+  /** Remember the newest message seen in a watched conversation (catch-up reads after it). Does not touch updated_at. */
+  watchSeen(id, ts) {
+    const w = this.getWatch(id); if (!w) return;
+    const next = tsMax(w.last_seen_ts, ts);
+    if (next !== w.last_seen_ts) this.db.prepare(`UPDATE watches SET last_seen_ts=? WHERE id=?`).run(next, id);
+  }
+  /** End watches: by conversation (and optionally agent). Returns how many. */
+  stopWatches({ channel, thread_ts, agent_id = null, state = 'stopped', now = Date.now() }) {
+    const rows = this.db.prepare(`SELECT id FROM watches WHERE state='active' AND channel=? AND (is_dm=1 OR thread_ts=?)${agent_id ? ' AND agent_id=?' : ''}`).all(...[channel, thread_ts, ...(agent_id ? [agent_id] : [])]);
+    for (const r of rows) this.db.prepare(`UPDATE watches SET state=?, updated_at=? WHERE id=?`).run(state, now, r.id);
+    return rows.length;
+  }
+  expireWatches(now = Date.now()) {
+    const rows = this.db.prepare(`SELECT * FROM watches WHERE state='active' AND expires_at<=?`).all(now).map(rowToWatch);
+    for (const w of rows) { this.db.prepare(`UPDATE watches SET state='expired', updated_at=? WHERE id=?`).run(now, w.id); this.audit('watch_expired', null, w.owner, { watch: w.id }); }
+    return rows;
+  }
+  /** Insert a reply once: returns null when this message was already recorded (live delivery vs catch-up). */
+  addWatchReply(watch_id, { ts, user, text, state = 'new', now = Date.now() }) {
+    const id = 'r' + crypto.randomBytes(5).toString('hex');
+    const r = this.db.prepare(`INSERT OR IGNORE INTO watch_replies(id,watch_id,ts,user,text,state,batch,created_at) VALUES(?,?,?,?,?,?,NULL,?)`).run(id, watch_id, ts, user, text, state, now);
+    return r.changes ? this.getWatchReply(id) : null;
+  }
+  getWatchReply(id) { return this.db.prepare(`SELECT * FROM watch_replies WHERE id=?`).get(id) ?? null; }
+  updateWatchReply(id, fields) {
+    const cols = Object.keys(fields).map((k) => `${k}=?`);
+    this.db.prepare(`UPDATE watch_replies SET ${cols.join(',')} WHERE id=?`).run(...Object.values(fields), id);
+    return this.getWatchReply(id);
+  }
+  repliesInBatch(watch_id, batch, { state = null } = {}) {
+    return this.db.prepare(`SELECT * FROM watch_replies WHERE watch_id=? AND batch=?${state ? ' AND state=?' : ''} ORDER BY CAST(ts AS REAL)`).all(...[watch_id, batch, ...(state ? [state] : [])]);
+  }
+  setBatchState(watch_id, batch, from, to) {
+    return this.db.prepare(`UPDATE watch_replies SET state=? WHERE watch_id=? AND batch=? AND state=?`).run(to, watch_id, batch, from).changes;
   }
 
   // ---- dedupe ----

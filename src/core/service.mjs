@@ -1,16 +1,23 @@
 // Wires chat, brain, store and executors. The only module that causes side effects on decisions.
+import crypto from 'node:crypto';
 import { ownerForChannel, ownerById } from './config.mjs';
 import { buildCatalogue } from './catalogue.mjs';
-import { decideNew, decideFollowup, forcesCard } from './router.mjs';
+import { decideNew, decideFollowup, forcesCard, decideWatchReply } from './router.mjs';
 import { isEngaged } from './state.mjs';
 import { loadPeople, peopleForPrompt, tagPeople } from './people.mjs';
-import { ownerMessage, chatFollowup } from '../executor/briefs.mjs';
+import { ownerMessage, chatFollowup, watchForward } from '../executor/briefs.mjs';
 import { ttlFor, rateLimited, ownerOverloaded, fmtTime } from '../approvals/policy.mjs';
-import { ACTIONS, approvalCard, actionedCard, investigatingCard, resultCard, agentReplyCard, editBriefView, briefFromView } from '../approvals/cards.mjs';
+import { ACTIONS, WATCH_ACTIONS, approvalCard, actionedCard, investigatingCard, resultCard, agentReplyCard, editBriefView, briefFromView, watchCard } from '../approvals/cards.mjs';
+
+/** A Lekam request in one of these states owns its thread's follow-ups, even if a session also watches the thread. */
+const LIVE_REQUEST = new Set(['PENDING_APPROVAL', 'APPROVED', 'INVESTIGATING', 'RUNNING']);
+/** Watch replies don't need the skills/repos catalogue: keep that brain call small. */
+const WATCH_CATALOGUE = "(Not needed here: this is a reply in a conversation the owner's own agent session is waiting on. Propose no skills, repos or actions.)";
+const NO_ACCESS = /not_in_channel|channel_not_found|missing_scope|not_allowed_token_type|is_archived/;
 
 export class Service {
-  constructor({ config, store, chat, brain, executors, log = () => {} }) {
-    Object.assign(this, { config, store, chat, brain, executors, log });
+  constructor({ config, store, chat, brain, executors, watchExec = null, log = () => {} }) {
+    Object.assign(this, { config, store, chat, brain, executors, watchExec, log });
     this.catalogue = buildCatalogue(config, { log });
     this.timers = [];
     this.reactionChains = new Map();
@@ -26,6 +33,11 @@ export class Service {
     this.timers.push(setInterval(() => this.expireCards().catch((e) => this.log('error', e.stack)), 60e3).unref());
     this.timers.push(setInterval(() => this.store.pruneEvents(), 36e5).unref());
     this.timers.push(setInterval(() => this.idleSweep().catch((e) => this.log('error', e.stack)), 24 * 36e5).unref());
+    // Thread watches: expire, check new registrations every minute; re-read every watched conversation now and then.
+    this.timers.push(setInterval(() => this.watchTick().catch((e) => this.log('error', e.stack)), 60e3).unref());
+    this.timers.push(setInterval(() => this.catchUpWatches().catch((e) => this.log('error', e.stack)), this.config.watches.catch_up_interval_ms).unref());
+    // Replies posted while Lekam was down. Not awaited: Slack retries can be slow and events already flow.
+    this.catchUpWatches().catch((e) => this.log('warn', `watch catch-up at start failed: ${e.message}`));
     this.log('info', `lekam started: ${this.catalogue.skills.length} skills, ${this.config.repos.length} repos, ${this.config.owners.length} owner(s)`);
   }
 
@@ -41,6 +53,7 @@ export class Service {
   }
   /** Engaged = live request, or Lekam posted in the thread within chat.thread_engagement (store first, then the thread itself). */
   async isEngagedThread(channel, thread_ts) {
+    if (this.store.activeWatchFor(channel, thread_ts)) return true;
     const r = this.store.findByThread(channel, thread_ts);
     if (r && isEngaged(r.state)) return true;
     const within = this.config.chat.thread_engagement_ms;
@@ -148,6 +161,9 @@ export class Service {
       const r = this.store.findByCard(msg.channel, msg.thread_ts);
       if (r) return this.onSessionReply(r, msg);
     }
+    // Someone replied where a session Lekam didn't start is waiting (thread watch): the owner decides whether it goes on.
+    const watch = this.watchFor(msg);
+    if (watch) return this.onWatchReply(msg, watch);
     const existing = this.store.findByThread(msg.channel, msg.thread_ts);
     if (existing && isEngaged(existing.state) && (msg.kind === 'followup' || existing.state !== 'DONE')) return this.onFollowup(msg, existing);
     if (msg.kind === 'followup') {
@@ -160,6 +176,8 @@ export class Service {
 
   /** A post as the owner that Lekam didn't make. In a request thread, tell the owner: it skipped the Post step. */
   async onPostedAsOwner(msg) {
+    const w = this.store.activeWatchFor(msg.channel, msg.thread_ts);
+    if (w) this.store.watchSeen(w.id, msg.ts); // most likely the waiting session posting again
     const r = this.store.findByThread(msg.channel, msg.thread_ts);
     this.store.audit('owner_post_via_other_app', r?.id ?? null, msg.user, { channel: msg.channel, ts: msg.ts, app: msg.via_app });
     if (!r?.card || r.owner !== msg.user) return;
@@ -304,6 +322,7 @@ export class Service {
 
   // ---------- owner actions ----------
   async onAction(a) {
+    if (WATCH_ACTIONS.has(a.action_id)) return this.onWatchAction(a);
     const [id, tag, extra] = String(a.value ?? '').split('|');
     const request = this.store.getRequest(id);
     if (!request) { if (a.action_id !== ACTIONS.OUTWARD_SELECT) await this.chat.ephemeral(a.channel, a.user, `That request no longer exists.`); return; }
@@ -489,6 +508,183 @@ export class Service {
     await this.updateCard(request, actionedCard(await this.cardArgs(request), `Failed: ${String(reason).slice(0, 200)}`, link ? [{ type: 'context', elements: [{ type: 'mrkdwn', text: `<${link}|open in Paseo>` }] }] : []));
     if (request.card) await this.toOwner(request, `${this.nudge(request)}Failed: ${String(reason).slice(0, 300)}${link ? ` · <${link}|open in Paseo>` : ''}`).catch(() => {});
     if (request.kind === 'bot_mention') await this.post(request.channel, request.thread_ts, `That didn't go through (${String(reason).slice(0, 120)}). ${this.ownerName(request.owner)} has the details.`);
+  }
+
+  // ---------- thread watches ----------
+  // A session Lekam didn't start (e.g. one the owner runs by hand) posted somewhere and registered a watch with
+  // `lekam watch`. Replies there come to the owner as a card; only the owner's Forward sends them to the session.
+
+  /** The watch that should take this message, or null. Bot mentions, the owner, and threads with a live request keep their flows. */
+  watchFor(msg) {
+    if (msg.kind === 'bot_mention' || this.config.ownerIds.has(msg.user)) return null;
+    const w = this.store.activeWatchFor(msg.channel, msg.thread_ts);
+    if (!w) return null;
+    const live = this.store.findByThread(msg.channel, msg.thread_ts);
+    if (live && LIVE_REQUEST.has(live.state)) return null;
+    return w;
+  }
+
+  async onWatchReply(msg, watch) {
+    return this.serial(`wr:${watch.id}`, async () => {
+      const reply = this.store.addWatchReply(watch.id, { ts: msg.ts, user: msg.user, text: msg.text });
+      this.store.watchSeen(watch.id, msg.ts);
+      if (!reply) return; // already handled: live delivery and catch-up both saw it
+      const cls = await this.classifyWatchReply(msg, watch);
+      const d = decideWatchReply(cls);
+      this.store.audit('watch_reply', null, msg.user, { watch: watch.id, decision: d.type, reason: d.reason, intent: cls?.intent ?? null, ts: msg.ts });
+      if (d.type === 'ignore') { this.store.updateWatchReply(reply.id, { state: 'skipped' }); return; }
+      await this.addToWatchCard(this.store.getWatch(watch.id), reply);
+    });
+  }
+
+  async classifyWatchReply(msg, watch) {
+    try {
+      const thread = await this.chat.fetchThread(msg.channel, watch.is_dm ? msg.thread_ts : watch.thread_ts, this.config.brain.thread_context_messages);
+      const named = [];
+      for (const m of thread) named.push({ user: m.user === this.chat.botUserId ? 'Lekam' : await this.chat.userName(m.user), text: m.text, ts: m.ts });
+      const channelName = await this.chat.channelName(msg.channel);
+      return await this.brain.classify(
+        { kind: 'watch_reply', requester: await this.chat.userName(msg.user), channel: channelName ? '#' + channelName : `a direct message to ${this.ownerName(watch.owner)}`, text: msg.text, thread: named, watchedSession: watch.title || 'an agent session' },
+        { persona: this.config.persona, catalogue: WATCH_CATALOGUE, outcomes: [], ownerName: this.ownerName(watch.owner), request_id: null },
+      );
+    } catch (e) { this.log('warn', `brain failed on watch reply: ${e.message}`); this.store.audit('brain_error', null, msg.user, { message: e.message, watch: watch.id }); return null; }
+  }
+
+  /** One pending card per watch: a new reply joins it while the owner hasn't acted, else a new card is posted
+   *  (the first top-level in the owner's DM, later ones in its thread with an @-mention). */
+  async addToWatchCard(watch, reply) {
+    const pending = watch.pending_card;
+    if (pending) {
+      this.store.updateWatchReply(reply.id, { state: 'pending', batch: pending.batch });
+      await this.chat.update(pending.channel, pending.ts, await this.renderWatchCard(watch, pending.batch, { mention: pending.threaded }));
+      this.store.audit('watch_card_updated', null, watch.owner, { watch: watch.id, batch: pending.batch });
+      return;
+    }
+    const batch = 'b' + crypto.randomBytes(4).toString('hex');
+    this.store.updateWatchReply(reply.id, { state: 'pending', batch });
+    const threaded = !!watch.card;
+    const posted = await this.chat.dm(watch.owner, await this.renderWatchCard(watch, batch, { mention: threaded }), threaded ? watch.card.ts : undefined);
+    this.store.updateWatch(watch.id, { pending_card: { channel: posted.channel, ts: posted.ts, batch, threaded }, ...(threaded ? {} : { card: { channel: posted.channel, ts: posted.ts } }) });
+    this.store.audit('watch_card', null, watch.owner, { watch: watch.id, batch });
+  }
+
+  async renderWatchCard(watch, batch, { mention = false, outcome = null, note = null } = {}) {
+    const replies = [];
+    for (const r of this.store.repliesInBatch(watch.id, batch)) replies.push({ name: await this.chat.userName(r.user), text: r.text, link: await this.chat.permalink(watch.channel, r.ts) });
+    const channelName = watch.is_dm ? null : await this.chat.channelName(watch.channel);
+    const where = watch.is_dm ? `a DM with ${replies[0]?.name ?? 'someone'}` : channelName ? `#${channelName}` : 'a thread';
+    const permalink = watch.is_dm ? null : await this.chat.permalink(watch.channel, watch.thread_ts);
+    return watchCard({ watch, batch, replies, where, permalink, host: watch.host, agentLink: this.watchExec?.agentLink(watch.agent_id) ?? null, mention: mention ? `<@${watch.owner}> ` : '', outcome, note });
+  }
+
+  async onWatchAction(a) {
+    const [watchId, batch] = String(a.value ?? '').split('|');
+    const watch = this.store.getWatch(watchId);
+    if (!watch) return this.chat.ephemeral(a.channel, a.user, `That watch no longer exists.`);
+    if (a.user !== watch.owner) {
+      this.store.audit('watch_action_rejected_identity', null, a.user, { watch: watchId, action: a.action_id });
+      return this.chat.ephemeral(a.channel, a.user, `Not yours to approve.`);
+    }
+    const to = { [ACTIONS.WATCH_FORWARD]: 'forwarded', [ACTIONS.WATCH_IGNORE]: 'ignored', [ACTIONS.WATCH_STOP]: 'stopped' }[a.action_id];
+    // Same queue as incoming replies: a reply can't join this batch after the owner has acted on it.
+    const taken = await this.serial(`wr:${watchId}`, async () => {
+      const replies = this.store.repliesInBatch(watchId, batch, { state: 'pending' });
+      if (!replies.length) return null;
+      this.store.setBatchState(watchId, batch, 'pending', to);
+      if (this.store.getWatch(watchId).pending_card?.batch === batch) this.store.updateWatch(watchId, { pending_card: null });
+      if (a.action_id === ACTIONS.WATCH_STOP) this.store.updateWatch(watchId, { state: 'stopped' });
+      return replies;
+    });
+    if (!taken) return this.chat.ephemeral(a.channel, a.user, `Already handled.`);
+    this.store.audit(`watch_${to}`, null, a.user, { watch: watchId, batch, replies: taken.length });
+    const card = { channel: a.channel, ts: a.message_ts };
+    const update = async (opts) => { if (card.ts) await this.chat.update(card.channel, card.ts, await this.renderWatchCard(watch, batch, opts)); };
+    try {
+      switch (a.action_id) {
+        case ACTIONS.WATCH_IGNORE: return await update({ outcome: `*Ignored* ${fmtTime()}` });
+        case ACTIONS.WATCH_STOP: return await update({ outcome: `*Stopped watching* ${fmtTime()}. Replies in this conversation won't come to you any more.` });
+        case ACTIONS.WATCH_FORWARD: {
+          await update({ outcome: `*Forwarding* ${fmtTime()}` });
+          return this.forwardWatch(watch, taken, card, batch);
+        }
+      }
+    } catch (e) { this.log('error', `watch action ${a.action_id} failed: ${e.stack ?? e}`); await this.chat.ephemeral(a.channel, a.user, `That didn't work: ${e.message}`); }
+  }
+
+  /** Send forwarded replies to the waiting session: wait for it to be idle (never interrupt a turn), then start a new turn. */
+  forwardWatch(watch, replies, card, batch) {
+    return this.serial(`wf:${watch.id}`, async () => {
+      const update = async (opts) => { if (card.ts) await this.chat.update(card.channel, card.ts, await this.renderWatchCard(watch, batch, opts)); };
+      const link = this.watchExec?.agentLink(watch.agent_id) ?? null;
+      try {
+        if (!this.watchExec) throw new Error('no watch executor configured');
+        const st = await this.watchExec.status(watch);
+        if (st.archived) throw new Error('the session is archived. Unarchive it in Paseo, then try again');
+        if (st.status === 'running') {
+          await update({ outcome: `*Waiting* for the session to finish its current turn, then forwarding` });
+          await this.watchExec.waitIdle(watch, this.config.watches.wait_timeout_ms);
+        }
+        const channelName = watch.is_dm ? null : await this.chat.channelName(watch.channel);
+        const quotedReplies = [];
+        for (const r of replies) quotedReplies.push({ fromName: await this.chat.userName(r.user), text: r.text, link: await this.chat.permalink(watch.channel, r.ts) });
+        const text = watchForward({ ownerName: this.ownerName(watch.owner), permalink: watch.is_dm ? null : await this.chat.permalink(watch.channel, watch.thread_ts), where: watch.is_dm ? `a DM with ${quotedReplies[0]?.fromName ?? 'someone'}` : channelName ? `#${channelName}` : null, replies: quotedReplies });
+        await this.watchExec.send(watch, text);
+        if (this.store.getWatch(watch.id)?.state === 'active') this.store.updateWatch(watch.id, { expires_at: Date.now() + this.config.watches.ttl_ms });
+        this.store.audit('watch_delivered', null, watch.owner, { watch: watch.id, batch, replies: replies.length, agent: watch.agent_id, host: watch.host });
+        await update({ outcome: `*Forwarded* ${fmtTime()}${link ? ` \u00b7 <${link}|open in Paseo>` : ''}` });
+      } catch (e) {
+        this.log('warn', `forward to ${watch.agent_id}@${watch.host} failed: ${e.message}`);
+        this.store.audit('watch_forward_failed', null, watch.owner, { watch: watch.id, batch, message: e.message });
+        // Put the replies back so the owner can try again from the same card.
+        await this.serial(`wr:${watch.id}`, async () => {
+          this.store.setBatchState(watch.id, batch, 'forwarded', 'pending');
+          const w = this.store.getWatch(watch.id);
+          if (w && !w.pending_card && card.ts) this.store.updateWatch(watch.id, { pending_card: { channel: card.channel, ts: card.ts, batch, threaded: !!w.card && w.card.ts !== card.ts } });
+        });
+        await update({ note: `:warning: Couldn't forward: ${String(e.message).slice(0, 300)}` }).catch(() => {});
+      }
+    });
+  }
+
+  /** Every minute: expire watches, and read new registrations once (replies posted before they registered, access check). */
+  async watchTick() {
+    this.store.expireWatches();
+    for (const w of this.store.listWatches()) if (!w.checked_at) await this.catchUpWatch(w).catch((e) => this.log('warn', `watch catch-up ${w.id}: ${e.message}`));
+  }
+  async catchUpWatches() {
+    this.store.expireWatches();
+    for (const w of this.store.listWatches()) await this.catchUpWatch(w).catch((e) => this.log('warn', `watch catch-up ${w.id}: ${e.message}`));
+  }
+  /** Handle messages in a watched conversation that arrived while Lekam wasn't listening. Same rules as live ones. */
+  async catchUpWatch(watch) {
+    if (!this.chat.readSince) return;
+    let msgs;
+    try { msgs = await this.chat.readSince(watch.channel, { thread_ts: watch.is_dm ? null : watch.thread_ts, oldest: watch.last_seen_ts }); }
+    catch (e) {
+      if (NO_ACCESS.test(e.message)) return this.watchNoAccess(watch, e.message);
+      throw e;
+    }
+    this.store.updateWatch(watch.id, { checked_at: Date.now() });
+    for (const m of msgs) {
+      if (Number(m.ts) <= Number(watch.last_seen_ts)) continue;
+      if (this.store.getWatch(watch.id)?.state !== 'active') return;
+      const skip = (m.subtype && m.subtype !== 'thread_broadcast') || !m.user || m.bot_id || m.user === this.chat.botUserId || this.config.ownerIds.has(m.user)
+        || (this.chat.botUserId && String(m.raw_text ?? '').includes(`<@${this.chat.botUserId}`)); // asked Lekam: the live bot-mention flow owns it
+      const thread_ts = m.thread_ts ?? m.ts;
+      const live = this.store.findByThread(watch.channel, thread_ts);
+      if (skip || !String(m.text ?? '').trim() || (live && LIVE_REQUEST.has(live.state))) { this.store.watchSeen(watch.id, m.ts); continue; }
+      await this.onWatchReply({ channel: watch.channel, ts: m.ts, thread_ts, user: m.user, text: m.text, kind: 'catch_up' }, watch);
+    }
+  }
+  async watchNoAccess(watch, reason) {
+    this.store.updateWatch(watch.id, { state: 'no_access' });
+    this.store.audit('watch_no_access', null, watch.owner, { watch: watch.id, channel: watch.channel, reason });
+    const name = watch.is_dm ? null : await this.chat.channelName(watch.channel);
+    const what = watch.is_dm ? 'that DM' : name ? `#${name}` : `channel ${watch.channel}`;
+    const fix = watch.is_dm
+      ? `I can only read DMs people send you when \`capture_dms\` is on with the \`im:history\` user scope.`
+      : `I'm not in ${what}: invite me there (\`/invite @${this.chat.appName ?? 'Lekam'}\`), then have the session post in the thread again.`;
+    await this.chat.dm(watch.owner, `I can't watch ${what} for *${watch.title || 'an agent session'}*, so replies there won't reach it. ${fix}`).catch(() => {});
   }
 
   // ---------- timers ----------

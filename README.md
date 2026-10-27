@@ -38,6 +38,24 @@ Slack ──Socket Mode──▶ lekam ──▶ brain (LLM, JSON only, no tools
 
 Status lives in one reaction on the original message: 👀 pending → ⚙️ running → ✅ done · 🚫 declined · ❌ failed · ❓ needs info. The ✅ lands when the result is posted to the thread.
 
+## Thread watches: replies back to sessions Lekam didn't start
+
+You also run agents by hand. When one of them posts in Slack ("@Priya, ready for your review") and goes idle, the reply would normally go nowhere. A **watch** fixes that: the session (or a hook in it) registers the thread with Lekam, and replies there come back to you.
+
+```bash
+lekam watch --channel C0123 --thread 1712345678.123456 --agent <paseo agent id> --host <host name> --title "PR session" [--message-ts <ts of the session's post>]
+```
+
+- Replies in the thread (in a DM: the next messages in that conversation) from anyone but you, including ones that tag you, come to you as one card in your DMs: who replied, the reply, the waiting session. **Forward to session** · **Ignore** · **Stop watching**. Nothing reaches the session without your tap.
+- Acknowledgements ("thanks", "ok", emoji) are dropped. Replies that arrive before you act join the same card and are forwarded together.
+- Forward starts a new turn in the same Paseo session, with each reply quoted as coming from that person (not you: information, not permission). A busy session is waited for, never interrupted. An archived one isn't sent to; the card says so and you can retry.
+- Sessions on other machines are reached with the `paseo` CLI over SSH: name each host under `watches.hosts` (`local` for the daemon on Lekam's machine, `ssh://user@host` for another). Registration itself needs no secrets, so a remote session can run it over SSH.
+- One waiting session per thread: a later registration by another session takes the thread over. The same session registering again renews the watch (`--renew-only` renews and otherwise does nothing). Watches expire after `watches.ttl` (3 days) without a renewal or a forward.
+- Lekam re-reads watched conversations at start-up and every `watches.catch_up_interval`, so replies posted while it was disconnected aren't lost. If it can't read a conversation (not invited to the channel), it tells you once.
+- A live Lekam request in the same thread keeps its follow-ups, and `@Lekam` mentions there are normal requests.
+
+`lekam watches` lists active watches; `lekam unwatch --channel … --thread …` ends one.
+
 ## Install
 
 Requirements: Node ≥ 22.13, a running Paseo daemon with at least one provider, an OpenAI-compatible endpoint (LiteLLM, OpenAI, …) for the brain, and a Slack workspace where you can create an app.
@@ -79,6 +97,7 @@ Everything personal lives in `lekam.yml`, `persona.md` (the bot's voice) and `gu
 - `outward_actions` — the ids the brain may propose and you approve per request.
 - `people_file` / `people` — who to @-tag in posted results (a JSON roster like `{members:[{name, slackId, github}]}`, or inline `{name, slack_id, github, aliases}`). Names, GitHub logins and the owner-voice rewrite's references become Slack mentions; the owner is never tagged.
 - `agent_tools` — plain-text list of live data sources your agents can reach (HR, Jira, CI…). Without it the brain may shrug at questions like "any leave plans?" instead of carding them.
+- `watches` — thread watches: `ttl` (default `3d`), `hosts` (host name → `local` or a `paseo --host` target such as `ssh://root@other-box`; default: this machine only), `paseo_bin`, `wait_timeout` (how long Forward waits for a busy session, `45m`), `catch_up_interval` (`15m`).
 - `repos`, `skills_dirs` — the catalogue the brain sees. Skills are read from `*/SKILL.md` frontmatter (`name`, `description`, optional `lekam_outward_actions`). A `catalogue_file` can replace the auto-generated skills section.
 
 ## CLI
@@ -88,13 +107,16 @@ lekam run        start the service
 lekam check      verify env, brain, daemon/provider, Slack auth (exit 1 on any failure)
 lekam catalogue  print what the brain sees
 lekam audit      tail the append-only audit log (--tail N)
+lekam watch      register or renew a thread watch (JSON out; no secrets needed)
+lekam unwatch    end the watch on a thread
+lekam watches    list active watches (--all for ended ones)
 ```
 
 ## Design
 
 The spec lives in `openspec/` (OpenSpec): `openspec/changes/phase-1-front-door/` has the proposal, design and tasks; `openspec/specs/*/spec.md` are the capability specs. Three seams — chat adapter, brain, executor — are interfaces with one implementation each (Slack, OpenAI-compatible, Paseo), so other platforms/endpoints/executors can be added.
 
-Phase 1 limits: Slack only, Paseo only, no passive listening, no auto-approved task types, investigate-only mode is a brief not a sandbox.
+Phase 1 limits: Slack only, Paseo only, no passive listening (watched threads are the one exception, and only for registered threads), no auto-approved task types, investigate-only mode is a brief not a sandbox.
 
 ## Development
 

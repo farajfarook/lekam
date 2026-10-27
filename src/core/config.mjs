@@ -36,6 +36,9 @@ const DEFAULTS = {
   repos: [],
   skills_dirs: [],
   agent_tools: [],
+  // Thread watches: sessions Lekam didn't start wait on replies. hosts maps the host name a session reports to a
+  // `paseo --host` target ("local" = this machine's daemon, no flag). Defaults to this machine only.
+  watches: { ttl: '3d', paseo_bin: 'paseo', wait_timeout: '45m', catch_up_interval: '15m', hosts: null },
 };
 
 const EXEC_DEFAULTS = { type: 'paseo', paseo_url: 'ws://127.0.0.1:6767/ws', provider: null, max_concurrent: 2, run_timeout: '45m', idle_archive_days: 7, workspace_label: 'Lekam', workspace_label_color: 'amber' };
@@ -58,7 +61,12 @@ export function loadConfig(file, { envLookup = env } = {}) {
 /** Resolve a parsed config object (exported for tests). */
 export function resolveConfig(raw, { baseDir = process.cwd(), envLookup = env } = {}) {
   const c = structuredClone(DEFAULTS);
-  for (const k of ['chat', 'brain', 'approvals', 'limits', 'store']) Object.assign(c[k], raw[k] ?? {});
+  for (const k of ['chat', 'brain', 'approvals', 'limits', 'store', 'watches']) Object.assign(c[k], raw[k] ?? {});
+  c.watches.ttl_ms = parseDuration(c.watches.ttl, 'watches.ttl');
+  c.watches.wait_timeout_ms = parseDuration(c.watches.wait_timeout, 'watches.wait_timeout');
+  c.watches.catch_up_interval_ms = parseDuration(c.watches.catch_up_interval, 'watches.catch_up_interval');
+  c.watches.hosts = c.watches.hosts && typeof c.watches.hosts === 'object' ? { ...c.watches.hosts } : { [os.hostname()]: 'local' };
+  for (const [h, t] of Object.entries(c.watches.hosts)) if (typeof t !== 'string' || !t) throw new ConfigError(`watches.hosts.${h}: use "local" or a paseo --host target like ssh://user@host`);
   c.chat.reactions = { ...DEFAULTS.chat.reactions, ...(raw.chat?.reactions ?? {}) };
   c.outward_actions = { ...(raw.outward_actions ?? {}) };
   c.repos = (raw.repos ?? []).map((r) => {

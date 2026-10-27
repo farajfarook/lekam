@@ -81,6 +81,17 @@ agent_tools:
 skills_dirs:
   - ~/.agents/skills
 
+# Optional: thread watches (sessions Lekam didn't start wait on replies; see README). Host names are what sessions
+# report with `lekam watch --host`; "local" = the daemon on this machine, otherwise a `paseo --host` target.
+# watches:
+#   ttl: 3d                      # expire after this long without a renewal or a forward
+#   wait_timeout: 45m            # Forward waits this long for a busy session to finish its turn
+#   catch_up_interval: 15m       # re-read watched conversations this often (also at start-up)
+#   paseo_bin: paseo
+#   hosts:
+#     my-box: local
+#     other-box: ssh://root@other-box.internal
+
 owners:
   - slack_id: U0000000000
     name: Owner

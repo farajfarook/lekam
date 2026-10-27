@@ -28,3 +28,15 @@ test('owner routing by channel', () => {
   const c = testConfig({ owners: [{ slack_id: 'U1', executor: { type: 'fake', cwd: '/a' } }, { slack_id: 'U2', default_for_channels: ['C9'], executor: { type: 'fake', cwd: '/b' } }] });
   assert.equal(ownerForChannel(c, 'C9').slack_id, 'U2'); assert.equal(ownerForChannel(c, 'C1').slack_id, 'U1');
 });
+test('watches block: defaults to this host only; durations and hosts validated', async () => {
+  const os = await import('node:os');
+  const c = testConfig();
+  assert.equal(c.watches.ttl_ms, 3 * 864e5);
+  assert.equal(c.watches.wait_timeout_ms, 45 * 60e3);
+  assert.deepEqual(c.watches.hosts, { [os.hostname()]: 'local' });
+  const d = testConfig({ watches: { ttl: '1d', hosts: { boxa: 'local', boxb: 'ssh://root@boxb.internal' } } });
+  assert.equal(d.watches.ttl_ms, 864e5);
+  assert.equal(d.watches.hosts.boxb, 'ssh://root@boxb.internal');
+  assert.throws(() => testConfig({ watches: { hosts: { boxb: '' } } }), /watches.hosts.boxb/);
+  assert.throws(() => testConfig({ watches: { ttl: 'forever' } }), /watches.ttl/);
+});

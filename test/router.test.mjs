@@ -49,3 +49,11 @@ test('decideFollowup', () => {
   assert.deepEqual(decideFollowup({ user: 'UR', text: 'x' }, req, null, c), { type: 'forward_or_card', text: 'x', reason: 'brain_error' });
   assert.deepEqual(decideFollowup({ user: 'UR', text: 'Right, I see this option' }, { ...req, kind: 'owner_mention' }, cls({ followup: 'not_for_agent', reply_to_user: 'Thanks, Markand.' }), c), { type: 'ignore', reason: 'owner_thread_not_for_agent' }, 'Lekam never chimes in as itself where the owner was asked');
 });
+test('decideWatchReply: only acknowledgements are dropped, no threshold, brain down cards', async () => {
+  const { decideWatchReply } = await import('../src/core/router.mjs');
+  assert.deepEqual(decideWatchReply(null), { type: 'card', reason: 'brain_unavailable' });
+  assert.equal(decideWatchReply(cls({ intent: 'chitchat', actionable: false })).type, 'ignore');
+  assert.equal(decideWatchReply(cls({ intent: 'chitchat', actionable: true })).type, 'card');
+  assert.equal(decideWatchReply(cls({ intent: 'fyi', actionable: false, confidence: 0.1 })).type, 'card');
+  assert.equal(decideWatchReply(cls({ intent: 'question', confidence: 0.05 })).type, 'card');
+});

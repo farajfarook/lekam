@@ -63,3 +63,11 @@ export function decideFollowup(message, request, cls, config) {
   if (cls.followup === 'scope_change' || request.approval_mode === 'once') return { type: 'forward_or_card', text: message.text, reason: cls.followup === 'scope_change' ? 'scope_change' : 'approve_once' };
   return { type: 'forward', text: message.text };
 }
+
+/** A reply in a thread an external session is waiting on (thread watch). Only acknowledgements are dropped; no
+ *  confidence threshold: the owner's own session asked for these replies. Brain down -> card. */
+export function decideWatchReply(cls) {
+  if (!cls) return { type: 'card', reason: 'brain_unavailable' };
+  if (cls.intent === 'chitchat' && !cls.actionable) return { type: 'ignore', reason: 'acknowledgement' };
+  return { type: 'card', reason: `intent_${cls.intent}` };
+}

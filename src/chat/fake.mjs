@@ -26,6 +26,17 @@ export class FakeChat {
   async ephemeral(channel, user, text) { this.ephemerals.push({ channel, user, text }); }
   async openModal(trigger_id, view) { this.modals.push(view); }
   async fetchThread(channel, thread_ts, limit = 20) { return this.thread(channel, thread_ts).slice(-limit); }
+  /** Messages after `oldest` in one thread, or in every thread of a channel (DMs); `noAccess` channels throw like Slack. */
+  async readSince(channel, { thread_ts = null, oldest }) {
+    if (this.noAccess?.has(channel)) throw new Error('An API error occurred: not_in_channel');
+    const out = [];
+    for (const [k, list] of this.threads) {
+      const [c, t] = k.split(':');
+      if (c !== channel || (thread_ts && t !== thread_ts)) continue;
+      for (const m of list) out.push({ thread_ts: t, raw_text: m.text, ...m });
+    }
+    return out.filter((m) => Number(m.ts) > Number(oldest)).sort((a, b) => Number(a.ts) - Number(b.ts));
+  }
   async permalink(channel, ts) { return `https://slack.example/${channel}/${ts}`; }
   async userName(id) { return `name:${id}`; }
   async channelName(id) { return `chan-${id}`; }

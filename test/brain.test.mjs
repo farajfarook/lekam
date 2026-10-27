@@ -52,3 +52,9 @@ test('owner-voice prompt keeps facts and links, drops narration, caps emoji', as
   assert.equal(await b.rewriteAsOwner({ report: 'r', request_text: 'q', requesterName: 'Ting', ownerName: 'Faraj' }), 'Hey Ting, all good :+1:');
   assert.ok(!('response_format' in bodies[0]) && !('tools' in bodies[0]));
 });
+test('watch_reply: user turn carries the waiting session; the prompt explains the kind', () => {
+  const u = JSON.parse(userTurn({ kind: 'watch_reply', requester: 'Priya', channel: '#x', text: 'approved', watchedSession: 'PR-42 review', ownerName: 'F' }));
+  assert.equal(u.watched_session, 'PR-42 review');
+  assert.ok(!('watched_session' in JSON.parse(userTurn({ kind: 'bot_mention', requester: 'U', channel: 'C', text: 'hi', ownerName: 'F' }))));
+  assert.ok(systemPrompt({ persona: 'P', catalogue: 'C', ownerName: 'F' }).includes('kind=watch_reply'));
+});

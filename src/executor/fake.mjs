@@ -13,3 +13,13 @@ export class FakeExecutor {
   async send(args) { this.calls.push(['send', args]); await this._wait(); return { sessionId: this.sessions.get(args.request.id)?.id, result: this._result('send', args) }; }
   async archive(request) { const s = this.sessions.get(request.id); if (s) s.archived = true; }
 }
+
+// Scripted stand-in for PaseoCli (thread watches). `agents` maps agent id -> { status, archived }.
+export class FakeWatchExec {
+  constructor({ agents = {}, hosts = { local: 'local' } } = {}) { this.agents = agents; this.hosts = hosts; this.calls = []; this.waiters = []; }
+  knows(host) { return host in this.hosts; }
+  agentLink(id) { return id ? `fake://agent/${id}` : null; }
+  async status({ agent_id, host }) { this.calls.push(['status', agent_id, host]); const a = this.agents[agent_id]; if (!a) throw new Error(`agent ${agent_id} not found`); return { status: a.status ?? 'idle', archived: !!a.archived, title: a.title ?? null }; }
+  async waitIdle({ agent_id, host }, timeoutMs) { this.calls.push(['wait', agent_id, host, timeoutMs]); const a = this.agents[agent_id]; if (a?.waitError) throw new Error(a.waitError); if (a) a.status = 'idle'; }
+  async send({ agent_id, host }, text) { this.calls.push(['send', agent_id, host, text]); const a = this.agents[agent_id]; if (a?.sendError) throw new Error(a.sendError); }
+}

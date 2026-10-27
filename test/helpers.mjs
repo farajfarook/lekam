@@ -5,7 +5,7 @@ import { Store } from '../src/store/sqlite.mjs';
 import { Service } from '../src/core/service.mjs';
 import { FakeChat } from '../src/chat/fake.mjs';
 import { FakeBrain } from '../src/brain/fake.mjs';
-import { FakeExecutor } from '../src/executor/fake.mjs';
+import { FakeExecutor, FakeWatchExec } from '../src/executor/fake.mjs';
 
 export const here = path.dirname(fileURLToPath(import.meta.url));
 export const OWNER = 'UOWNER', REQ = 'UREQ', CHAN = 'CTEAM';
@@ -26,12 +26,13 @@ export function testConfig(over = {}) {
 
 export const cls = (o = {}) => ({ intent: 'task_request', addressed_to_owner: true, actionable: true, confidence: 0.9, urgent: false, reply_to_user: 'On it once Faraj says yes.', brief: { summary: 'Fix the blank PDF export', skill: 'support-case', repo: 'owner-portal', outward_actions: ['jira_comment', 'pr_create'], notes: '' }, followup: null, clarifying_question: null, ...o });
 
-export async function harness({ brainScript = () => cls(), execScript = {}, config = testConfig() } = {}) {
+export async function harness({ brainScript = () => cls(), execScript = {}, config = testConfig(), watchAgents = {} } = {}) {
   const store = new Store(':memory:', { redact: config.secretValues });
   const chat = new FakeChat({ ownerIds: config.ownerIds });
   const brain = new FakeBrain(brainScript);
   const exec = new FakeExecutor({ script: execScript });
-  const svc = new Service({ config, store, chat, brain, executors: new Map([[OWNER, exec]]), log: () => {} });
+  const watchExec = new FakeWatchExec({ agents: watchAgents, hosts: { local: 'local', boxb: 'ssh://root@boxb.internal' } });
+  const svc = new Service({ config, store, chat, brain, executors: new Map([[OWNER, exec]]), watchExec, log: () => {} });
   await svc.start();
-  return { store, chat, brain, exec, svc, config };
+  return { store, chat, brain, exec, watchExec, svc, config };
 }
