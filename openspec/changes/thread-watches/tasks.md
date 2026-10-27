@@ -24,4 +24,4 @@
 ## 5. Docs and verification
 
 - [x] 5.1 README section and `config/lekam.example.yml` `watches:` block — reviewed in the diff
-- [ ] 5.2 `npm test` green; live smoke test: register a watch for a throwaway session, reply in a test thread, Forward, see the turn in Paseo (local and remote host)
+- [x] 5.2 `npm test` green; live smoke test: register a watch for a throwaway session, reply in a test thread, Forward, see the turn in Paseo (local and remote host)
