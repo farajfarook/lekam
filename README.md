@@ -40,21 +40,27 @@ Status lives in one reaction on the original message: 👀 pending → ⚙️ ru
 
 ## Thread watches: replies back to sessions Lekam didn't start
 
-You also run agents by hand. When one of them posts in Slack ("@Priya, ready for your review") and goes idle, the reply would normally go nowhere. A **watch** fixes that: the session (or a hook in it) registers the thread with Lekam, and replies there come back to you.
+You also run agents by hand. When one of them posts in Slack with your account ("@Priya, ready for your review") and goes idle, the reply would normally go nowhere. Lekam watches for that and brings replies back to the session. Nothing needs installing in the agent, and it works for any provider Paseo runs (pi, Claude Code, Codex, …).
+
+**How Lekam knows which session posted.** Every message your account posts in a channel Lekam is in (and in your DMs, with `capture_dms`) is checked: Lekam asks each configured Paseo daemon for agents active in the last few minutes, reads their recent timelines, and looks for the Slack tool call whose output names that exact message. A match registers a **watch** for that session. A post that tags someone (or a group, @here) or is a DM starts a watch; any other post only renews one the session already has. Scheduled runs and Lekam's own sessions are skipped. Messages you type yourself match nothing and are ignored.
+
+**What happens with a watch.**
+- Replies in the thread (in a DM: the next messages in that conversation) from anyone but you, including ones that tag you, come to you as one card in your DMs: who replied, the reply, the waiting session. **Forward to session** · **Ignore** · **Stop watching**. Nothing reaches the session without your tap.
+- Acknowledgements ("thanks", "ok", emoji) are dropped. Replies that arrive before you act join the same card and are forwarded together.
+- Forward starts a new turn in the same Paseo session, with each reply quoted as coming from that person (not you: information, not permission). A busy session is waited for, never interrupted. An archived one isn't sent to; the card says so and you can retry.
+- One waiting session per thread: a later session posting there takes it over. Watches expire after `watches.ttl` (3 days) without a renewal or a forward.
+- Lekam re-reads watched conversations at start-up and every `watches.catch_up_interval`, so replies posted while it was disconnected aren't lost. If it can't read a conversation (not invited to the channel), it tells you once.
+- A live Lekam request in the same thread keeps its follow-ups, and `@Lekam` mentions there are normal requests.
+
+**What it needs.** Lekam in the channel; `capture_dms` for DMs; and each daemon listed under `watches.hosts`: `local` for the one on Lekam's machine, `ssh://user@host` for others (Lekam runs `ssh` itself through the Paseo SDK, so the other host's daemon stays on 127.0.0.1), or a `ws://` URL. `lekam check` shows whether each is reachable.
+
+**Manual fallback.** For a session Lekam can't see posting (another Slack app, a channel it joined late):
 
 ```bash
 lekam watch --channel C0123 --thread 1712345678.123456 --agent <paseo agent id> --host <host name> --title "PR session" [--message-ts <ts of the session's post>]
 ```
 
-- Replies in the thread (in a DM: the next messages in that conversation) from anyone but you, including ones that tag you, come to you as one card in your DMs: who replied, the reply, the waiting session. **Forward to session** · **Ignore** · **Stop watching**. Nothing reaches the session without your tap.
-- Acknowledgements ("thanks", "ok", emoji) are dropped. Replies that arrive before you act join the same card and are forwarded together.
-- Forward starts a new turn in the same Paseo session, with each reply quoted as coming from that person (not you: information, not permission). A busy session is waited for, never interrupted. An archived one isn't sent to; the card says so and you can retry.
-- Sessions on other machines are reached with the `paseo` CLI over SSH: name each host under `watches.hosts` (`local` for the daemon on Lekam's machine, `ssh://user@host` for another). Registration itself needs no secrets, so a remote session can run it over SSH.
-- One waiting session per thread: a later registration by another session takes the thread over. The same session registering again renews the watch (`--renew-only` renews and otherwise does nothing). Watches expire after `watches.ttl` (3 days) without a renewal or a forward.
-- Lekam re-reads watched conversations at start-up and every `watches.catch_up_interval`, so replies posted while it was disconnected aren't lost. If it can't read a conversation (not invited to the channel), it tells you once.
-- A live Lekam request in the same thread keeps its follow-ups, and `@Lekam` mentions there are normal requests.
-
-`lekam watches` lists active watches; `lekam unwatch --channel … --thread …` ends one.
+It needs no secrets, so it can run over SSH. `lekam watches` lists active watches (and how each was registered); `lekam unwatch --channel … --thread …` ends one.
 
 ## Install
 
@@ -97,7 +103,7 @@ Everything personal lives in `lekam.yml`, `persona.md` (the bot's voice) and `gu
 - `outward_actions` — the ids the brain may propose and you approve per request.
 - `people_file` / `people` — who to @-tag in posted results (a JSON roster like `{members:[{name, slackId, github}]}`, or inline `{name, slack_id, github, aliases}`). Names, GitHub logins and the owner-voice rewrite's references become Slack mentions; the owner is never tagged.
 - `agent_tools` — plain-text list of live data sources your agents can reach (HR, Jira, CI…). Without it the brain may shrug at questions like "any leave plans?" instead of carding them.
-- `watches` — thread watches: `ttl` (default `3d`), `hosts` (host name → `local` or a `paseo --host` target such as `ssh://root@other-box`; default: this machine only), `paseo_bin`, `wait_timeout` (how long Forward waits for a busy session, `45m`), `catch_up_interval` (`15m`).
+- `watches` — thread watches: `ttl` (default `3d`), `hosts` (host name → `local`, `ssh://user@host[?daemonPort=N]` or `ws://…`; default: this machine only), `wait_timeout` (how long Forward waits for a busy session, `45m`), `catch_up_interval` (`15m`), and `detect`: `enabled` (true), `lookback` (`10m`: agents active this long before a post are searched), `delays` (`[3s, 15s, 60s]`: when to look, as the tool's output can land after the post; typed-looking posts get the first only), `send_tools` (regex of Slack send tool names), `skip_labels` (`[lekam, paseo.schedule-id]`), `timeline_limit` (150).
 - `repos`, `skills_dirs` — the catalogue the brain sees. Skills are read from `*/SKILL.md` frontmatter (`name`, `description`, optional `lekam_outward_actions`). A `catalogue_file` can replace the auto-generated skills section.
 
 ## CLI
@@ -107,7 +113,7 @@ lekam run        start the service
 lekam check      verify env, brain, daemon/provider, Slack auth (exit 1 on any failure)
 lekam catalogue  print what the brain sees
 lekam audit      tail the append-only audit log (--tail N)
-lekam watch      register or renew a thread watch (JSON out; no secrets needed)
+lekam watch      register or renew a thread watch by hand (JSON out; no secrets needed)
 lekam unwatch    end the watch on a thread
 lekam watches    list active watches (--all for ended ones)
 ```

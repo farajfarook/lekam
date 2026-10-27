@@ -13,7 +13,7 @@
     "check": "node src/cli.mjs check"
   },
   "dependencies": {
-    "@getpaseo/client": "^0.11.2",
+    "@getpaseo/client": "^0.13.0",
     "@slack/bolt": "^5.1.0",
     "@slack/web-api": "^8.2.0",
     "yaml": "^2.8.0"

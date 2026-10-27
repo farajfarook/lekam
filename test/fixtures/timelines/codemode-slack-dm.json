@@ -1,0 +1,53 @@
+[
+ {
+  "provider": "pi",
+  "item": {
+   "type": "tool_call",
+   "callId": "toolu_01V4aphXVQx1k6vYxrXzpNPS",
+   "name": "codemode",
+   "status": "completed",
+   "detail": {
+    "type": "unknown",
+    "input": {
+     "code": "const r = await tools.mcp__litellm__slack_slack_send_message({ channel_id: \"UOWNER\", message: \"Smoke test, please ignore\" }); return r;"
+    },
+    "output": {
+     "content": [
+      {
+       "type": "text",
+       "text": "Script completed\nWall time 2.8 seconds\nOutput:\n"
+      },
+      {
+       "type": "text",
+       "text": "{\"content\":[{\"text\":\"{\\\"message_link\\\":\\\"https:\\\\/\\\\/example.slack.com\\\\/archives\\\\/DOWNERSELF\\\\/p1793088470490099\\\",\\\"message_context\\\":{\\\"message_ts\\\":\\\"1793088470.490099\\\",\\\"channel_id\\\":\\\"DOWNERSELF\\\"}}\",\"type\":\"text\"}],\"isError\":false}"
+      }
+     ],
+     "details": {
+      "calls": [
+       {
+        "id": "toolu_01V4aphXVQx1k6vYxrXzpNPS/1",
+        "name": "mcp__litellm__slack_slack_send_message",
+        "args": "{\"channel_id\":\"UOWNER\",\"message\":\"Smoke test, please ignore\"}",
+        "status": "ok",
+        "durationMs": 2603.739442
+       }
+      ]
+     }
+    }
+   },
+   "error": null
+  },
+  "timestamp": "2026-10-27T09:23:11.237Z",
+  "seqStart": 2,
+  "seqEnd": 3,
+  "sourceSeqRanges": [
+   {
+    "startSeq": 2,
+    "endSeq": 3
+   }
+  ],
+  "collapsed": [
+   "tool_lifecycle"
+  ]
+ }
+]

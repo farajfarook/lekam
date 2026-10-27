@@ -40,3 +40,16 @@ test('watches block: defaults to this host only; durations and hosts validated',
   assert.throws(() => testConfig({ watches: { hosts: { boxb: '' } } }), /watches.hosts.boxb/);
   assert.throws(() => testConfig({ watches: { ttl: 'forever' } }), /watches.ttl/);
 });
+test('watches: host targets are daemon connections; detection defaults', () => {
+  const c = testConfig({ watches: { hosts: { a: 'local', b: 'ssh://root@boxb.internal', c: 'ws://10.0.0.5:6767/ws' } } });
+  assert.equal(c.watches.hosts.c, 'ws://10.0.0.5:6767/ws');
+  for (const bad of ['boxb.internal:6767', 'paseo --host x', 'http://x']) assert.throws(() => testConfig({ watches: { hosts: { b: bad } } }), /watches.hosts.b/);
+  const d = c.watches.detect;
+  assert.equal(d.enabled, true);
+  assert.equal(d.lookback_ms, 10 * 60e3);
+  assert.deepEqual(d.delays_ms, [3000, 15000, 60000]);
+  assert.ok(d.send_tools_re.test('mcp__litellm__slack_slack_send_message') && !d.send_tools_re.test('mcp__litellm__slack_slack_read_thread'));
+  assert.deepEqual(d.skip_labels, ['lekam', 'paseo.schedule-id']);
+  assert.throws(() => testConfig({ watches: { detect: { delays: ['15s', '3s'] } } }), /increasing/);
+  assert.equal(testConfig({ watches: { detect: { enabled: false } } }).watches.detect.enabled, false);
+});

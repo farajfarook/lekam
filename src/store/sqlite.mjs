@@ -36,6 +36,8 @@ const MIGRATIONS = [
    CREATE TABLE IF NOT EXISTS watch_replies (
      id TEXT PRIMARY KEY, watch_id TEXT NOT NULL, ts TEXT NOT NULL, user TEXT NOT NULL, text TEXT NOT NULL,
      state TEXT NOT NULL, batch TEXT, created_at INTEGER NOT NULL, UNIQUE(watch_id, ts));`,
+  // How a watch was registered: 'cli' (lekam watch) or 'detected' (session-post detection).
+  `ALTER TABLE watches ADD COLUMN source TEXT NOT NULL DEFAULT 'cli';`,
 ];
 
 const rowToWatch = (r) => (r ? { ...r, is_dm: !!r.is_dm, card: P(r.card), pending_card: P(r.pending_card) } : null);
@@ -167,7 +169,7 @@ export class Store {
    * so catch-up never skips a reply missed live); another agent supersedes it. `renewOnly` renews an existing watch
    * for this conversation and agent and otherwise does nothing. Returns { action, watch }.
    */
-  registerWatch({ channel, thread_ts, agent_id, host, owner, title = null, message_ts = null, ttlMs, renewOnly = false, now = Date.now() }) {
+  registerWatch({ channel, thread_ts, agent_id, host, owner, title = null, message_ts = null, ttlMs, renewOnly = false, source = 'cli', now = Date.now() }) {
     const is_dm = String(channel).startsWith('D');
     const current = this.activeWatchFor(channel, thread_ts, { now });
     const expires_at = now + ttlMs;
@@ -182,9 +184,9 @@ export class Store {
       this.audit('watch_superseded', null, owner, { watch: current.id, by_agent: agent_id });
     }
     const id = 'w' + crypto.randomBytes(5).toString('hex');
-    this.db.prepare(`INSERT INTO watches(id,channel,thread_ts,is_dm,owner,agent_id,host,title,state,last_seen_ts,checked_at,card,pending_card,created_at,updated_at,expires_at)
-      VALUES(?,?,?,?,?,?,?,?,'active',?,NULL,NULL,NULL,?,?,?)`).run(id, channel, thread_ts, is_dm ? 1 : 0, owner, agent_id, host, title, tsMax(thread_ts, message_ts), now, now, expires_at);
-    this.audit('watch_registered', null, owner, { watch: id, channel, thread_ts, agent: agent_id, host, replaced: current?.id ?? null });
+    this.db.prepare(`INSERT INTO watches(id,channel,thread_ts,is_dm,owner,agent_id,host,title,state,last_seen_ts,checked_at,card,pending_card,created_at,updated_at,expires_at,source)
+      VALUES(?,?,?,?,?,?,?,?,'active',?,NULL,NULL,NULL,?,?,?,?)`).run(id, channel, thread_ts, is_dm ? 1 : 0, owner, agent_id, host, title, tsMax(thread_ts, message_ts), now, now, expires_at, source);
+    this.audit('watch_registered', null, owner, { watch: id, channel, thread_ts, agent: agent_id, host, source, replaced: current?.id ?? null });
     return { action: current ? 'replaced' : 'created', watch: this.getWatch(id) };
   }
   /** The Lekam request whose agent session this is, if any. */

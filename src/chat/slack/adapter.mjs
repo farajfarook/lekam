@@ -30,6 +30,11 @@ export async function renderMentions(text = '', nameOf = async (id) => id, { dro
   return unescapeSlack(out).replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').trim();
 }
 
+/** Pure: a "Sent using <app>" context line, which apps posting with a user token often add. */
+export function hasAppFooter(blocks) {
+  return Array.isArray(blocks) && blocks.some((b) => b?.type === 'context' && (b.elements ?? []).some((e) => /sent using/i.test(String(e?.text ?? ''))));
+}
+
 /** Pure: classify a raw Slack message event into {kind,...} or null. `isEngaged(channel,thread)` is a callback.
  *  `dmOwner(channel)` returns the owner whose own 1:1 DM this is (captured via their user token), or null for Lekam's DMs. */
 export async function classifyEvent(ev, { botUserId, ownerIds, isEngaged, dmOwner = async () => null, nameOf = async (id) => id, appId = null }) {
@@ -48,16 +53,20 @@ export async function classifyEvent(ev, { botUserId, ownerIds, isEngaged, dmOwne
   // people typing in Slack get a client_msg_id, app posts get the app's id instead.
   if (ev.app_id && !ev.client_msg_id) base.via_app = ev.app_id;
   if (!base.text) return null;
+  // The owner's own messages: candidates for session-post detection (an agent may have posted them with the owner's
+  // account). Slack's app markers are inconsistent for the same app, so they are only hints.
+  const ownerPost = (owner, extra = {}) => ({ kind: 'owner_post', owner, ...base, ...extra, hints: { app_id: ev.app_id ?? null, no_client_msg_id: !ev.client_msg_id, footer: hasAppFooter(ev.blocks) } });
   if (base.is_dm) {
-    // Someone DM'd an owner directly (not Lekam): treat it like tagging that owner. The owner's own messages are ignored.
+    // Someone DM'd an owner directly (not Lekam): treat it like tagging that owner. The owner's own lines there are owner posts.
     const owner = await dmOwner(channel);
-    if (owner) return ev.user === owner ? null : { kind: 'owner_mention', owner, dm: true, ...base, is_dm: false };
+    if (owner) return ev.user === owner ? ownerPost(owner, { dm: true, is_dm: false }) : { kind: 'owner_mention', owner, dm: true, ...base, is_dm: false };
     return { kind: 'bot_mention', ...base };
   }
   if (mentions(text, botUserId)) return { kind: 'bot_mention', ...base };
   // An owner tagging themselves ("@Faraj what did the team do today") is an owner tag asked by the owner:
   // replies go out as the owner like any owner tag, but it is never dropped for low confidence.
   if (ownerIds.has(ev.user) && mentions(text, ev.user)) return { kind: 'owner_mention', owner: ev.user, self: true, ...base };
+  if (ownerIds.has(ev.user)) return ownerPost(ev.user);
   const owner = [...ownerIds].find((id) => id !== ev.user && mentions(text, id));
   if (owner) return { kind: 'owner_mention', owner, ...base };
   if (ev.thread_ts && (await isEngaged(channel, ev.thread_ts))) return { kind: 'followup', ...base };

@@ -37,6 +37,7 @@ test('watch / renew / list / unwatch without secrets, from the CLI', () => {
   const list = run('watches').out.watches;
   assert.equal(list.length, 1);
   assert.equal(list[0].host, 'boxb');
+  assert.equal(list[0].source, 'cli');
   assert.equal(list[0].title, 'PR-42 review session');
   assert.equal(run('unwatch', '--channel', 'C0TEST00001', '--thread', '1712345678.000100').out.stopped, 1);
   assert.equal(run('watches').out.watches.length, 0);

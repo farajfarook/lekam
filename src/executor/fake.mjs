@@ -14,12 +14,26 @@ export class FakeExecutor {
   async archive(request) { const s = this.sessions.get(request.id); if (s) s.archived = true; }
 }
 
-// Scripted stand-in for PaseoCli (thread watches). `agents` maps agent id -> { status, archived }.
-export class FakeWatchExec {
-  constructor({ agents = {}, hosts = { local: 'local' } } = {}) { this.agents = agents; this.hosts = hosts; this.calls = []; this.waiters = []; }
+// Scripted stand-in for Daemons (thread watches). `agents` maps agent id -> { host, status, archived, title, labels,
+// updatedAt }, `timelines` maps agent id -> timeline entries, `down` lists unreachable hosts.
+export class FakeDaemons {
+  constructor({ agents = {}, timelines = {}, hosts = { local: 'local' }, down = [] } = {}) {
+    Object.assign(this, { agents, timelines, hosts, down: new Set(down) }); this.calls = [];
+  }
+  names() { return Object.keys(this.hosts); }
   knows(host) { return host in this.hosts; }
   agentLink(id) { return id ? `fake://agent/${id}` : null; }
-  async status({ agent_id, host }) { this.calls.push(['status', agent_id, host]); const a = this.agents[agent_id]; if (!a) throw new Error(`agent ${agent_id} not found`); return { status: a.status ?? 'idle', archived: !!a.archived, title: a.title ?? null }; }
+  _up(host) { if (this.down.has(host)) throw new Error(`${host}: connect ECONNREFUSED`); }
+  async listRecentAgents(host, sinceMs) {
+    this.calls.push(['list', host]); this._up(host);
+    return Object.entries(this.agents).filter(([, a]) => (a.host ?? 'local') === host && (a.updatedAt ?? Date.now()) >= sinceMs)
+      .sort(([, a], [, b]) => (b.updatedAt ?? Date.now()) - (a.updatedAt ?? Date.now()))
+      .map(([id, a]) => ({ id, title: a.title ?? null, status: a.status ?? 'idle', labels: a.labels ?? {}, archived: !!a.archived, updatedAt: a.updatedAt ?? Date.now() }));
+  }
+  async timeline(host, agentId) { this.calls.push(['timeline', host, agentId]); this._up(host); const t = this.timelines[agentId]; return (typeof t === 'function' ? t() : t) ?? []; }
+  async status({ agent_id, host }) { this.calls.push(['status', agent_id, host]); this._up(host); const a = this.agents[agent_id]; if (!a) throw new Error(`agent ${agent_id} not found`); return { status: a.status ?? 'idle', archived: !!a.archived, title: a.title ?? null }; }
   async waitIdle({ agent_id, host }, timeoutMs) { this.calls.push(['wait', agent_id, host, timeoutMs]); const a = this.agents[agent_id]; if (a?.waitError) throw new Error(a.waitError); if (a) a.status = 'idle'; }
   async send({ agent_id, host }, text) { this.calls.push(['send', agent_id, host, text]); const a = this.agents[agent_id]; if (a?.sendError) throw new Error(a.sendError); }
+  async check(host) { this._up(host); return { ok: true, agents: Object.keys(this.agents).length }; }
+  async close() {}
 }

@@ -29,7 +29,7 @@ Thread watches work, but registration depends on a pi extension on every session
 
 3. **Match order: exact ts, then text.** Pure function `matchPost(timeline, post)` in `src/core/post-match.mjs`: walks `tool_call` items whose `name` matches `watches.detect.send_tools` (default `/slack.*send_message|post_message/i`), stringifies `detail.output`/`structuredContent`, and looks for `post.ts` or its permalink form `p<digits>`. Fallback: `normText(detail.input.message) === normText(post.text)` (the same normaliser the adapter uses for echoes) with a conversation check (`input.channel_id` equals the Slack channel, or is a user id and the post is a DM) and the entry's completion within ±2 min. Returns `{ callId, how: 'ts' | 'text' }`.
 
-4. **Delay and retries.** The Slack event can beat the timeline write. Schedule detection at +3 s, retry at +15 s and +60 s while unmatched. Per-post state lives in memory (a map keyed by `channel:ts`); a restart drops pending detections, which catch-up at start replays from the audit? No: keep it simple – posts during a restart window are lost to detection and `lekam watch` remains the fallback.
+4. **Delay and retries.** The Slack event can beat the timeline write. Schedule detection at +3 s, retry at +15 s and +60 s while unmatched; posts that look typed (no app hints) get the first attempt only. Pending detections live in memory: a restart drops them, and `lekam watch` remains the fallback.
 
 5. **One connection per host, SDK for everything.** `src/executor/daemons.mjs` holds `{ name → DaemonClient }`: `local` → the owner executor's `paseo_url` (`ws://127.0.0.1:6767/ws` by default), `ws(s)://` as given, `ssh://` → `createSshTunnel` then `ws://<endpoint>/ws`. Lazy connect, reconnect on error, tunnel closed on stop. It offers `listRecentAgents(since)`, `timeline(agentId)`, `status(agentId)`, `waitIdle(agentId, timeoutMs)` (poll `fetchAgent` or subscribe), `send(agentId, text)` (`sendAgentMessage`, no wait). `PaseoCli` is deleted; `FakeWatchExec` becomes `FakeDaemons` with the same methods plus `agents`/`timelines` fixtures.
    *Alternative:* keep the CLI for forward and use the SDK only for detection – two code paths for one host, rejected.
@@ -54,6 +54,10 @@ Thread watches work, but registration depends on a pi extension on every session
 3. Remove the pi extension and its links (done outside this repo on 27 Oct 2026).
 4. Rollback: revert; the store schema is unchanged.
 
-## Open Questions
+## Resolved during build
 
-- Does `fetchAgentTimeline` accept a direction/cursor to read newest-first? If not, `limit` 80 from the tail of a long session may miss the call; then use `searchAgentTimeline` (exists on the client) with the timestamp as the query. Either works without changing the spec.
+- `fetchAgentTimeline(agentId, { direction: 'tail', limit })` reads newest-first; entries carry `timestamp`.
+- `@getpaseo/client/node` exports `createHostClient(connection, config)`, which accepts `ws://…` and `ssh://…` directly (it owns the SSH process per connection attempt). Used instead of `createSshTunnel`.
+- `waitForFinish(agentId, timeout)` returns at once for an idle agent, so it serves as "wait for idle".
+- `sendAgentMessage` only offers `interrupt` (default) or `steer` for a running turn; Lekam waits for idle first and passes `steer` so a turn that started in between is joined, not interrupted.
+- A reloaded session's timeline (after a daemon or agent restart) no longer has nested script calls as their own entries; the script call's record lists them (`detail.output.details.calls`). Matching accepts a script call that made a send call and whose output names the message.

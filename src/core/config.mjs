@@ -36,9 +36,13 @@ const DEFAULTS = {
   repos: [],
   skills_dirs: [],
   agent_tools: [],
-  // Thread watches: sessions Lekam didn't start wait on replies. hosts maps the host name a session reports to a
-  // `paseo --host` target ("local" = this machine's daemon, no flag). Defaults to this machine only.
-  watches: { ttl: '3d', paseo_bin: 'paseo', wait_timeout: '45m', catch_up_interval: '15m', hosts: null },
+  // Thread watches: sessions Lekam didn't start wait on replies. hosts maps a host name to its Paseo daemon:
+  // "local" (the owner executor's paseo_url), ws(s)://… or ssh://user@host. Defaults to this machine only.
+  // detect: find the session behind each post made with the owner's account (from the daemons' timelines).
+  watches: {
+    ttl: '3d', wait_timeout: '45m', catch_up_interval: '15m', hosts: null,
+    detect: { enabled: true, lookback: '10m', delays: ['3s', '15s', '60s'], send_tools: 'slack.*(send|post)_?message', skip_labels: ['lekam', 'paseo.schedule-id'], timeline_limit: 150 },
+  },
 };
 
 const EXEC_DEFAULTS = { type: 'paseo', paseo_url: 'ws://127.0.0.1:6767/ws', provider: null, max_concurrent: 2, run_timeout: '45m', idle_archive_days: 7, workspace_label: 'Lekam', workspace_label_color: 'amber' };
@@ -62,11 +66,20 @@ export function loadConfig(file, { envLookup = env } = {}) {
 export function resolveConfig(raw, { baseDir = process.cwd(), envLookup = env } = {}) {
   const c = structuredClone(DEFAULTS);
   for (const k of ['chat', 'brain', 'approvals', 'limits', 'store', 'watches']) Object.assign(c[k], raw[k] ?? {});
+  c.watches.detect = { ...DEFAULTS.watches.detect, ...(raw.watches?.detect ?? {}) };
   c.watches.ttl_ms = parseDuration(c.watches.ttl, 'watches.ttl');
   c.watches.wait_timeout_ms = parseDuration(c.watches.wait_timeout, 'watches.wait_timeout');
   c.watches.catch_up_interval_ms = parseDuration(c.watches.catch_up_interval, 'watches.catch_up_interval');
   c.watches.hosts = c.watches.hosts && typeof c.watches.hosts === 'object' ? { ...c.watches.hosts } : { [os.hostname()]: 'local' };
-  for (const [h, t] of Object.entries(c.watches.hosts)) if (typeof t !== 'string' || !t) throw new ConfigError(`watches.hosts.${h}: use "local" or a paseo --host target like ssh://user@host`);
+  for (const [h, t] of Object.entries(c.watches.hosts)) if (typeof t !== 'string' || !/^(local|wss?:\/\/\S+|ssh:\/\/\S+)$/.test(t)) throw new ConfigError(`watches.hosts.${h}: use "local", a ws:// URL or ssh://user@host`);
+  const d = c.watches.detect;
+  d.enabled = d.enabled !== false;
+  d.lookback_ms = parseDuration(d.lookback, 'watches.detect.lookback');
+  d.delays_ms = (Array.isArray(d.delays) && d.delays.length ? d.delays : ['3s']).map((v, i) => parseDuration(v, `watches.detect.delays[${i}]`));
+  if (d.delays_ms.some((v, i) => i && v < d.delays_ms[i - 1])) throw new ConfigError('watches.detect.delays must be in increasing order');
+  try { d.send_tools_re = new RegExp(d.send_tools, 'i'); } catch (e) { throw new ConfigError(`watches.detect.send_tools: ${e.message}`); }
+  d.skip_labels = (d.skip_labels ?? []).map(String);
+  d.timeline_limit = Number(d.timeline_limit) || 150;
   c.chat.reactions = { ...DEFAULTS.chat.reactions, ...(raw.chat?.reactions ?? {}) };
   c.outward_actions = { ...(raw.outward_actions ?? {}) };
   c.repos = (raw.repos ?? []).map((r) => {

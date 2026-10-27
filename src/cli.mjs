@@ -7,7 +7,7 @@ import { Store } from './store/sqlite.mjs';
 import { Service } from './core/service.mjs';
 import { OpenAICompatibleBrain } from './brain/openai-compatible.mjs';
 import { PaseoExecutor } from './executor/paseo.mjs';
-import { PaseoCli } from './executor/paseo-cli.mjs';
+import { Daemons } from './executor/daemons.mjs';
 
 const args = process.argv.slice(2);
 const cmd = args.find((a) => !a.startsWith('-')) ?? 'run';
@@ -42,7 +42,7 @@ function watchCommand(config, store) {
   const fail = (error) => out({ ok: false, error }, 1);
   if (cmd === 'watches') {
     const states = args.includes('--all') ? ['active', 'expired', 'stopped', 'superseded', 'no_access'] : ['active'];
-    return out({ ok: true, watches: store.listWatches({ states }).map((w) => ({ id: w.id, state: w.state, channel: w.channel, thread_ts: w.thread_ts, agent: w.agent_id, host: w.host, title: w.title, expires_at: new Date(w.expires_at).toISOString() })) });
+    return out({ ok: true, watches: store.listWatches({ states }).map((w) => ({ id: w.id, state: w.state, channel: w.channel, thread_ts: w.thread_ts, agent: w.agent_id, host: w.host, source: w.source, title: w.title, expires_at: new Date(w.expires_at).toISOString() })) });
   }
   const channel = opt('channel'), thread_ts = opt('thread'), agent_id = opt('agent');
   if (!/^[CDG][A-Z0-9]{2,}$/.test(channel ?? '')) return fail('--channel must be a Slack channel id (C…, D… or G…)');
@@ -99,7 +99,12 @@ async function main() {
       const ex = new PaseoExecutor({ ...o.executor, config, log });
       try { const r = await ex.check(); row(`paseo ${o.name}`, `${r.url} provider=${r.provider} cwd=${o.executor.cwd}`); } catch (e) { row(`paseo ${o.name}`, e.message, false); } finally { await ex.close(); }
     }
-    row('watch hosts', Object.entries(config.watches.hosts).map(([h, t]) => `${h}=${t}`).join(', ') + ` (ttl ${config.watches.ttl})`);
+    const daemons = new Daemons({ hosts: config.watches.hosts, localUrl: config.owners[0].executor.paseo_url, log });
+    for (const h of daemons.names()) {
+      try { await daemons.check(h); row(`watch host ${h}`, `${config.watches.hosts[h]} reachable`); } catch (e) { row(`watch host ${h}`, `${config.watches.hosts[h]}: ${e.message}`, false); }
+    }
+    await daemons.close();
+    row('session-post detection', config.watches.detect.enabled ? `on (lookback ${config.watches.detect.lookback}, attempts at ${config.watches.detect.delays.join('/')})` : 'off');
     if (config.chat.platform === 'slack') {
       const { WebClient } = await import('@slack/web-api');
       try { const a = await new WebClient(config.chat.bot_token).auth.test(); row('slack auth', `${a.user} in ${a.team}`); } catch (e) { row('slack auth', e.message, false); }
@@ -116,8 +121,8 @@ async function main() {
     const chat = await buildChat(config);
     const brain = new OpenAICompatibleBrain({ ...config.brain, audit: (t, id, actor, d) => store.audit(t, id, actor, d), log });
     const executors = await buildExecutors(config);
-    const watchExec = new PaseoCli({ ...config.watches, log });
-    const svc = new Service({ config, store, chat, brain, executors, watchExec, log });
+    const daemons = new Daemons({ hosts: config.watches.hosts, localUrl: config.owners[0].executor.paseo_url, log });
+    const svc = new Service({ config, store, chat, brain, executors, daemons, log });
     await svc.start();
     const stop = async () => { log('info', 'stopping'); await svc.stop(); store.close(); process.exit(0); };
     process.on('SIGINT', stop); process.on('SIGTERM', stop);

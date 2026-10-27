@@ -20,7 +20,7 @@ test('a reply that mentions the owner keeps who it was addressed to', async () =
 test('posts made through an app with a user token: Lekam\'s own are dropped, others are marked via_app', async () => {
   assert.equal(await classifyEvent({ type: 'message', user: 'UOWN', app_id: 'ALEKAM', channel: 'C', ts: '3', thread_ts: '1', text: '<@UPREETHI> hi' }, ctx(true)), null);
   const other = await classifyEvent({ type: 'message', user: 'UOWN', app_id: 'AOTHER', channel: 'C', ts: '4', thread_ts: '1', text: '<@UPREETHI> could you do it?' }, ctx(true));
-  assert.deepEqual([other.kind, other.via_app, other.text], ['followup', 'AOTHER', '@Preethi Prakash could you do it?']);
+  assert.deepEqual([other.kind, other.via_app, other.text], ['owner_post', 'AOTHER', '@Preethi Prakash could you do it?']);
   const typed = await classifyEvent({ type: 'message', user: 'UOWN', client_msg_id: 'abc', channel: 'C', ts: '5', thread_ts: '1', text: 'typed by hand' }, ctx(true));
   assert.equal(typed.via_app, undefined);
 });
@@ -36,7 +36,8 @@ test('owner mention, including the owner tagging themselves', async () => {
   assert.equal(m.kind, 'owner_mention'); assert.equal(m.owner, 'UOWN'); assert.equal(m.text, '@Faraj Farook look');
   const self = await classifyEvent({ type: 'message', user: 'UOWN', channel: 'C', ts: '1', text: '<@UOWN> what did your team do today' }, ctx());
   assert.equal(self.kind, 'owner_mention'); assert.equal(self.owner, 'UOWN'); assert.ok(self.self); assert.equal(self.text, '@Faraj Farook what did your team do today');
-  assert.equal(await classifyEvent({ type: 'message', user: 'UOWN', channel: 'C', ts: '1', text: 'no tag here' }, ctx()), null);
+  const own = await classifyEvent({ type: 'message', user: 'UOWN', channel: 'C', ts: '1', text: 'no tag here', client_msg_id: 'x' }, ctx());
+  assert.deepEqual([own.kind, own.owner, own.hints], ['owner_post', 'UOWN', { app_id: null, no_client_msg_id: false, footer: false }], 'the owner\'s own lines are owner posts (session-post detection)');
 });
 test('followups only in engaged threads', async () => {
   const ev = { type: 'message', user: 'U1', channel: 'C', ts: '2', thread_ts: '1', text: 'more' };
@@ -76,7 +77,8 @@ test('DMs: Lekam\'s own DMs are bot mentions; DMs people send a capturing owner 
   assert.equal(toLekam.kind, 'bot_mention'); assert.ok(toLekam.is_dm);
   const toOwner = await classifyEvent({ type: 'message', channel_type: 'im', user: 'UTING', channel: 'DOWNER_TING', ts: '2', text: 'can you check the build?' }, c);
   assert.deepEqual([toOwner.kind, toOwner.owner, toOwner.dm, toOwner.is_dm], ['owner_mention', 'UOWN', true, false]);
-  assert.equal(await classifyEvent({ type: 'message', channel_type: 'im', user: 'UOWN', channel: 'DOWNER_TING', ts: '3', text: 'sure' }, c), null);
+  const mine = await classifyEvent({ type: 'message', channel_type: 'im', user: 'UOWN', channel: 'DOWNER_TING', ts: '3', text: 'sure' }, c);
+  assert.deepEqual([mine.kind, mine.owner, mine.dm, mine.is_dm], ['owner_post', 'UOWN', true, false]);
 });
 test('no loops: Lekam\'s own DMs to the owner, other bots, and posts made as the owner are never picked up', async () => {
   const c = { ...ctx(), dmOwner: async () => 'UOWN' }; // even if a DM looked like the owner's personal DM
@@ -84,6 +86,16 @@ test('no loops: Lekam\'s own DMs to the owner, other bots, and posts made as the
     { type: 'message', channel_type: 'im', bot_id: 'BLEKAM', user: 'UBOT', channel: 'DLEKAM', ts: '1', text: 'Result for ... Post to thread' }, // Lekam's card/result
     { type: 'message', channel_type: 'im', subtype: 'bot_message', bot_id: 'BJIRA', channel: 'DJIRA', ts: '2', text: 'Jira: you were assigned OP-1' }, // another app
     { type: 'message', channel_type: 'im', user: 'UBOT', channel: 'DLEKAM', ts: '3', text: 'hello' }, // Lekam's user id
-    { type: 'message', channel_type: 'im', user: 'UOWN', channel: 'DTING', ts: '4', text: 'Looking into this :eyes:' }, // posted as the owner
+    { type: 'message', channel_type: 'im', user: 'UOWN', app_id: 'ALEKAM', channel: 'DTING', ts: '4', text: 'Looking into this :eyes:' }, // Lekam posting as the owner
   ]) assert.equal(await classifyEvent(ev, c), null, JSON.stringify(ev));
+});
+
+test('owner posts carry the app hints Slack gives (as hints: they are inconsistent for the same app)', async () => {
+  const footer = [{ type: 'rich_text', elements: [] }, { type: 'context', elements: [{ type: 'mrkdwn', text: '*Sent using* AI Bot' }] }];
+  const a = await classifyEvent({ type: 'message', user: 'UOWN', channel: 'C', ts: '5', thread_ts: '1', client_msg_id: 'm1', blocks: footer, text: '<@UPREETHI> ready for review' }, ctx());
+  assert.deepEqual([a.kind, a.thread_ts, a.raw_text, a.hints], ['owner_post', '1', '<@UPREETHI> ready for review', { app_id: null, no_client_msg_id: false, footer: true }]);
+  const b = await classifyEvent({ type: 'message', user: 'UOWN', channel: 'C', ts: '6', app_id: 'AMCP', text: 'pushed the fix' }, ctx());
+  assert.deepEqual(b.hints, { app_id: 'AMCP', no_client_msg_id: true, footer: false });
+  assert.equal(b.via_app, 'AMCP');
+  assert.equal((await classifyEvent({ type: 'message', user: 'UOWN', channel: 'C', ts: '7', text: '<@UBOT> do it' }, ctx())).kind, 'bot_mention');
 });

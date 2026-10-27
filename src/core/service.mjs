@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import { ownerForChannel, ownerById } from './config.mjs';
 import { buildCatalogue } from './catalogue.mjs';
 import { decideNew, decideFollowup, forcesCard, decideWatchReply } from './router.mjs';
+import { matchPost, expectsReply } from './post-match.mjs';
 import { isEngaged } from './state.mjs';
 import { loadPeople, peopleForPrompt, tagPeople } from './people.mjs';
 import { ownerMessage, chatFollowup, watchForward } from '../executor/briefs.mjs';
@@ -16,13 +17,17 @@ const WATCH_CATALOGUE = "(Not needed here: this is a reply in a conversation the
 const NO_ACCESS = /not_in_channel|channel_not_found|missing_scope|not_allowed_token_type|is_archived/;
 
 export class Service {
-  constructor({ config, store, chat, brain, executors, watchExec = null, log = () => {} }) {
-    Object.assign(this, { config, store, chat, brain, executors, watchExec, log });
+  constructor({ config, store, chat, brain, executors, daemons = null, log = () => {} }) {
+    Object.assign(this, { config, store, chat, brain, executors, daemons, log });
     this.catalogue = buildCatalogue(config, { log });
     this.timers = [];
     this.reactionChains = new Map();
     this.turns = new Map(); // request id -> tail of its agent-turn queue
+    this.detections = new Set(); // session-post detections in flight
+    this.daemonDownAt = new Map(); // host -> last time an unreachable daemon was audited
   }
+  /** Wait between detection attempts (tests replace it). */
+  sleep(ms) { return new Promise((r) => { const t = setTimeout(r, ms); t.unref?.(); }); }
 
   async start() {
     this.chat.setEngagedLookup((channel, thread_ts) => this.isEngagedThread(channel, thread_ts));
@@ -41,7 +46,7 @@ export class Service {
     this.log('info', `lekam started: ${this.catalogue.skills.length} skills, ${this.config.repos.length} repos, ${this.config.owners.length} owner(s)`);
   }
 
-  async stop() { for (const t of this.timers) clearInterval(t); await this.chat.stop?.(); for (const e of this.executors.values()) await e.close?.(); }
+  async stop() { for (const t of this.timers) clearInterval(t); await this.chat.stop?.(); for (const e of this.executors.values()) await e.close?.(); await this.daemons?.close?.(); }
 
   // ---------- helpers ----------
   /** Outward actions granted on approval, per approvals.outward_actions_mode. */
@@ -151,8 +156,9 @@ export class Service {
   async onMessage(msg) {
     if (this.store.seen(msg.event_id)) { this.store.audit('duplicate_event', null, msg.user, { event_id: msg.event_id }); return; }
     if (!msg.is_dm && this.config.ownerIds.has(msg.user)) {
-      // Something posted as the owner through another app (an agent's Slack tool, say): not the owner typing. Never act on it.
-      if (msg.via_app) return this.onPostedAsOwner(msg);
+      // The owner's own message, typed or posted by an agent with the owner's account. Never acted on as a request:
+      // bookkeeping, then session-post detection (which session posted it, so replies can come back to it).
+      if (msg.kind === 'owner_post' || msg.via_app) return this.onOwnerPost(msg);
       // In the channel the owner is talking to people. Lekam only listens when tagged; steering happens in the DM session thread.
       if (msg.kind === 'followup') { this.store.audit('owner_untagged_ignored', this.store.findByThread(msg.channel, msg.thread_ts)?.id ?? null, msg.user, { channel: msg.channel }); return; }
     }
@@ -174,16 +180,22 @@ export class Service {
     return this.onNew(msg);
   }
 
-  /** A post as the owner that Lekam didn't make. In a request thread, tell the owner: it skipped the Post step. */
-  async onPostedAsOwner(msg) {
+  /** A message by the owner that Lekam didn't post. */
+  async onOwnerPost(msg) {
     const w = this.store.activeWatchFor(msg.channel, msg.thread_ts);
     if (w) this.store.watchSeen(w.id, msg.ts); // most likely the waiting session posting again
     const r = this.store.findByThread(msg.channel, msg.thread_ts);
-    this.store.audit('owner_post_via_other_app', r?.id ?? null, msg.user, { channel: msg.channel, ts: msg.ts, app: msg.via_app });
-    if (!r?.card || r.owner !== msg.user) return;
-    const link = await this.chat.permalink(msg.channel, msg.ts);
-    await this.toOwner(r, `${this.nudge(r)}Something was posted as you in this request's thread by another app, not through Lekam${link ? ` (<${link}|view>)` : ''}. If it was the agent, it skipped your Post step. I haven't acted on it.`).catch(() => {});
+    if (msg.via_app) {
+      // Posted as the owner through another app in a request's thread: the agent skipped the owner's Post step.
+      this.store.audit('owner_post_via_other_app', r?.id ?? null, msg.user, { channel: msg.channel, ts: msg.ts, app: msg.via_app });
+      if (r?.card && r.owner === msg.user) {
+        const link = await this.chat.permalink(msg.channel, msg.ts);
+        await this.toOwner(r, `${this.nudge(r)}Something was posted as you in this request's thread by another app, not through Lekam${link ? ` (<${link}|view>)` : ''}. If it was the agent, it skipped your Post step. I haven't acted on it.`).catch(() => {});
+      }
+    } else if (r) this.store.audit('owner_untagged_ignored', r.id, msg.user, { channel: msg.channel });
+    if (this.daemons && this.config.watches.detect.enabled) this.track(this.runDetection(msg));
   }
+  track(p) { const q = p.catch((e) => this.log('warn', `session-post detection failed: ${e.message}`)); this.detections.add(q); q.finally(() => this.detections.delete(q)); return q; }
 
   async onNew(msg) {
     const owner = msg.kind === 'owner_mention' ? ownerById(this.config, msg.owner) : ownerForChannel(this.config, msg.channel);
@@ -574,7 +586,7 @@ export class Service {
     const channelName = watch.is_dm ? null : await this.chat.channelName(watch.channel);
     const where = watch.is_dm ? `a DM with ${replies[0]?.name ?? 'someone'}` : channelName ? `#${channelName}` : 'a thread';
     const permalink = watch.is_dm ? null : await this.chat.permalink(watch.channel, watch.thread_ts);
-    return watchCard({ watch, batch, replies, where, permalink, host: watch.host, agentLink: this.watchExec?.agentLink(watch.agent_id) ?? null, mention: mention ? `<@${watch.owner}> ` : '', outcome, note });
+    return watchCard({ watch, batch, replies, where, permalink, host: watch.host, agentLink: this.daemons?.agentLink(watch.agent_id) ?? null, mention: mention ? `<@${watch.owner}> ` : '', outcome, note });
   }
 
   async onWatchAction(a) {
@@ -615,20 +627,20 @@ export class Service {
   forwardWatch(watch, replies, card, batch) {
     return this.serial(`wf:${watch.id}`, async () => {
       const update = async (opts) => { if (card.ts) await this.chat.update(card.channel, card.ts, await this.renderWatchCard(watch, batch, opts)); };
-      const link = this.watchExec?.agentLink(watch.agent_id) ?? null;
+      const link = this.daemons?.agentLink(watch.agent_id) ?? null;
       try {
-        if (!this.watchExec) throw new Error('no watch executor configured');
-        const st = await this.watchExec.status(watch);
+        if (!this.daemons) throw new Error('no watch executor configured');
+        const st = await this.daemons.status(watch);
         if (st.archived) throw new Error('the session is archived. Unarchive it in Paseo, then try again');
         if (st.status === 'running') {
           await update({ outcome: `*Waiting* for the session to finish its current turn, then forwarding` });
-          await this.watchExec.waitIdle(watch, this.config.watches.wait_timeout_ms);
+          await this.daemons.waitIdle(watch, this.config.watches.wait_timeout_ms);
         }
         const channelName = watch.is_dm ? null : await this.chat.channelName(watch.channel);
         const quotedReplies = [];
         for (const r of replies) quotedReplies.push({ fromName: await this.chat.userName(r.user), text: r.text, link: await this.chat.permalink(watch.channel, r.ts) });
         const text = watchForward({ ownerName: this.ownerName(watch.owner), permalink: watch.is_dm ? null : await this.chat.permalink(watch.channel, watch.thread_ts), where: watch.is_dm ? `a DM with ${quotedReplies[0]?.fromName ?? 'someone'}` : channelName ? `#${channelName}` : null, replies: quotedReplies });
-        await this.watchExec.send(watch, text);
+        await this.daemons.send(watch, text);
         if (this.store.getWatch(watch.id)?.state === 'active') this.store.updateWatch(watch.id, { expires_at: Date.now() + this.config.watches.ttl_ms });
         this.store.audit('watch_delivered', null, watch.owner, { watch: watch.id, batch, replies: replies.length, agent: watch.agent_id, host: watch.host });
         await update({ outcome: `*Forwarded* ${fmtTime()}${link ? ` \u00b7 <${link}|open in Paseo>` : ''}` });
@@ -644,6 +656,68 @@ export class Service {
         await update({ note: `:warning: Couldn't forward: ${String(e.message).slice(0, 300)}` }).catch(() => {});
       }
     });
+  }
+
+  // ---------- session-post detection ----------
+  // Which agent session posted this message with the owner's account? Read the timelines of agents that were active
+  // shortly before it, on every configured daemon, and find the Slack tool call whose output names this message.
+
+  /** A few attempts (the tool's output may not be in the timeline yet). Posts that look typed get one attempt. */
+  async runDetection(msg) {
+    const d = this.config.watches.detect;
+    const h = msg.hints ?? {};
+    const likelyApp = !!(h.app_id || h.no_client_msg_id || h.footer || msg.via_app);
+    const delays = likelyApp ? d.delays_ms : d.delays_ms.slice(0, 1);
+    let waited = 0;
+    for (const at of delays) {
+      await this.sleep(Math.max(0, at - waited)); waited = at;
+      const r = await this.detectSessionPost(msg);
+      if (r) return r;
+    }
+    if (likelyApp) this.store.audit('session_post_unmatched', null, msg.user, { channel: msg.channel, ts: msg.ts, hints: h });
+    return null;
+  }
+
+  async detectSessionPost(msg) {
+    const d = this.config.watches.detect;
+    const post = { channel: msg.channel, ts: msg.ts, raw_text: msg.raw_text ?? msg.text, dm: !!msg.dm || String(msg.channel).startsWith('D') };
+    const since = Number(msg.ts) * 1000 - d.lookback_ms;
+    let best = null;
+    for (const host of this.daemons.names()) {
+      let agents;
+      try { agents = await this.daemons.listRecentAgents(host, since); } catch (e) { this.daemonDown(host, e); continue; }
+      for (const agent of agents) {
+        if (agent.archived) continue;
+        let entries;
+        try { entries = await this.daemons.timeline(host, agent.id, { limit: d.timeline_limit }); } catch (e) { this.daemonDown(host, e); continue; }
+        const m = matchPost(entries, post, { sendTools: d.send_tools_re });
+        if (!m) continue;
+        if (m.how === 'ts') { best = { host, agent, m }; break; }
+        best ??= { host, agent, m };
+      }
+      if (best?.m.how === 'ts') break;
+    }
+    return best ? this.registerFromPost(msg, post, best) : null;
+  }
+
+  registerFromPost(msg, post, { host, agent, m }) {
+    const audit = { channel: msg.channel, ts: msg.ts, agent: agent.id, host, how: m.how };
+    const label = this.config.watches.detect.skip_labels.find((l) => agent.labels?.[l] !== undefined);
+    if (label) { this.store.audit('session_post_skipped', null, msg.user, { ...audit, reason: `label:${label}` }); return { action: 'skipped' }; }
+    if (this.store.requestBySession(agent.id)) { this.store.audit('session_post_skipped', null, msg.user, { ...audit, reason: 'lekam_session' }); return { action: 'skipped' }; }
+    const expects = expectsReply(post.raw_text, { ownerIds: this.config.ownerIds, dm: post.dm });
+    const r = this.store.registerWatch({ channel: msg.channel, thread_ts: msg.thread_ts ?? msg.ts, agent_id: agent.id, host, owner: msg.user, title: agent.title, message_ts: msg.ts, ttlMs: this.config.watches.ttl_ms, renewOnly: !expects, source: 'detected' });
+    this.store.audit('session_post_matched', null, msg.user, { ...audit, action: r.action, watch: r.watch?.id ?? null, expects_reply: expects });
+    return r;
+  }
+
+  /** An unreachable daemon is audited at most every 10 minutes per host; `lekam check` reports it. */
+  daemonDown(host, e) {
+    const last = this.daemonDownAt.get(host) ?? 0;
+    if (Date.now() - last < 10 * 60e3) return;
+    this.daemonDownAt.set(host, Date.now());
+    this.log('warn', `daemon ${host} unreachable: ${e.message}`);
+    this.store.audit('daemon_unreachable', null, null, { host, message: String(e.message).slice(0, 300) });
   }
 
   /** Every minute: expire watches, and read new registrations once (replies posted before they registered, access check). */
