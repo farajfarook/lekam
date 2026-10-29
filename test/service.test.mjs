@@ -483,6 +483,7 @@ test('posts as the owner keep Lekam out of the thread; posts by another app as t
   assert.equal(h.chat.posts.at(-1).as, OWNER, 'pickup ack went out as the owner');
   assert.equal(h.store.botSpokeRecently(CHAN, m.thread_ts, { withinMs: 60e3 }), false, 'a post as the owner does not engage Lekam in the thread');
   const sends = h.exec.calls.length; const dms = h.chat.dms.length;
+  h.config.watches.detect.enabled = false; // no session detection: a live request with an agent is flagged
   await h.chat.inject({ kind: 'followup', channel: CHAN, thread_ts: m.thread_ts, user: OWNER, via_app: 'AOTHER', text: '@Preethi Markand and Faraj cannot convert them' }); await tick();
   assert.equal(h.exec.calls.length, sends, 'not forwarded to the agent');
   assert.equal(h.chat.dms.length, dms + 1);
@@ -509,4 +510,35 @@ test('agent turns are serialised per request: overlapping owner messages get one
   assert.equal(maxInFlight, 1);
   const replies = h.chat.dms.slice(-2).map((d) => d.text);
   assert.deepEqual(replies, ['answer 1', 'answer 2']);
+});
+
+test('the thread root (a CI post) reaches the brain and the brief, and the owner\'s untagged answer to a clarifying question is taken up', async () => {
+  let n = 0;
+  const h = await harness({ brainScript: () => (++n === 1
+    ? cls({ intent: 'needs_clarification', actionable: false, confidence: 0.5, brief: null, reply_to_user: null, clarifying_question: 'What should be checked and fixed?' })
+    : cls({ reply_to_user: null })) });
+  const root = { user: 'BCI', name: 'Azure Pipelines', ts: '100.000001', text: 'My Stay full suite failed\n*Commit* `a7338`' };
+  h.chat.thread(CHAN, root.ts).push(root);
+  const ask = await h.chat.inject({ kind: 'bot_mention', channel: CHAN, thread_ts: root.ts, user: OWNER, text: 'can u check and fix it' });
+  assert.deepEqual(h.brain.calls[0].input.thread[0], { user: 'Azure Pipelines', text: root.text, ts: root.ts }, 'bot post named and kept');
+  assert.equal(h.chat.posts.at(-1).text, 'What should be checked and fixed?');
+  assert.deepEqual(h.chat.reactionsOn(CHAN, ask.ts), ['question']);
+  // Untagged reply from the owner: normally an owner post Lekam stays out of; here it answers Lekam's question.
+  await h.chat.inject({ kind: 'owner_post', owner: OWNER, channel: CHAN, thread_ts: root.ts, user: OWNER, text: 'Look at the thread fix the failing test', hints: {} });
+  assert.equal(h.brain.calls.length, 2, 'answer classified');
+  const req = h.store.findByThread(CHAN, root.ts);
+  assert.equal(req?.state, 'PENDING_APPROVAL', 'card opened');
+  assert.equal(req.classification.thread_excerpt[0].ts, root.ts, 'CI post is in the brief excerpt');
+  // Only once: the next untagged owner line in the thread is the owner talking again.
+  const calls = h.brain.calls.length;
+  await h.chat.inject({ kind: 'owner_post', owner: OWNER, channel: CHAN, thread_ts: root.ts, user: OWNER, text: 'thanks', hints: {} });
+  assert.equal(h.brain.calls.length, calls);
+});
+
+test('excerptOf keeps the thread root when the thread is long', async () => {
+  const { excerptOf } = await import('../src/core/service.mjs');
+  const thread = Array.from({ length: 15 }, (_, i) => ({ user: i % 4 === 3 ? 'UBOT' : 'U' + i, ts: String(i), text: 't' + i }));
+  const ex = excerptOf(thread, { skipTs: '14', botUserId: 'UBOT' });
+  assert.equal(ex.length, 8); assert.equal(ex[0].ts, '0'); assert.equal(ex.at(-1).ts, '13');
+  assert.ok(!ex.some((m) => m.user === 'UBOT'));
 });

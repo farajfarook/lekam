@@ -17,6 +17,16 @@ const WATCH_CATALOGUE = "(Not needed here: this is a reply in a conversation the
 /** One of Lekam's request sessions (labelled at creation, or known to the store). */
 const agentIsLekam = (agent, store) => agent.labels?.lekam !== undefined || !!store.requestBySession(agent.id);
 const NO_ACCESS = /not_in_channel|channel_not_found|missing_scope|not_allowed_token_type|is_archived/;
+/** How long an untagged owner reply still counts as the answer to Lekam's clarifying question in that thread. */
+const ANSWER_WINDOW_MS = 2 * 36e5;
+/** Thread messages kept for the card and the agent's brief: the thread's root (what it is about: a CI failure, an
+ *  alert) plus the latest ones. Lekam's own lines and the triggering message are left out. */
+export function excerptOf(thread, { skipTs, botUserId, max = 8 }) {
+  const rest = thread.filter((m) => m.ts !== skipTs && m.user !== botUserId);
+  if (rest.length <= max) return rest;
+  const root = thread[0] && rest[0] === thread[0] ? [thread[0]] : [];
+  return [...root, ...rest.slice(-(max - root.length))];
+}
 
 export class Service {
   constructor({ config, store, chat, brain, executors, daemons = null, log = () => {} }) {
@@ -27,6 +37,7 @@ export class Service {
     this.turns = new Map(); // request id -> tail of its agent-turn queue
     this.detections = new Set(); // session-post detections in flight
     this.daemonDownAt = new Map(); // host -> last time an unreachable daemon was audited
+    this.asked = new Map(); // `${channel}:${thread_ts}` -> { user, at }: Lekam asked this person a clarifying question there
   }
   /** Wait between detection attempts (tests replace it). */
   sleep(ms) { return new Promise((r) => { const t = setTimeout(r, ms); t.unref?.(); }); }
@@ -95,8 +106,13 @@ export class Service {
   }
   async cardArgs(request) {
     const excerpt = [];
-    for (const m of request.classification?.thread_excerpt ?? []) excerpt.push({ name: await this.chat.userName(m.user), text: m.text });
+    for (const m of request.classification?.thread_excerpt ?? []) excerpt.push({ name: await this.nameOf(m), text: m.text });
     return { request, config: this.config, excerpt, requesterName: await this.chat.userName(request.requester), permalink: await this.chat.permalink(request.channel, request.origin_ts), channelName: await this.chat.channelName(request.channel), lowConfidence: (request.classification?.confidence ?? 1) < this.config.brain.threshold };
+  }
+  /** Display name of a thread message's author: Lekam, a bot post's own name (CI, alerts), or the person. */
+  async nameOf(m) {
+    if (m.user === this.chat.botUserId) return this.chat.appName ?? 'Lekam';
+    return m.name ?? await this.chat.userName(m.user);
   }
   /** A card's button carries the outcome version it showed (v<at>); refuse actions from an older card. Cards from before versioning pass. */
   staleCard(request, tag) { return !!tag && tag.startsWith('v') && tag !== `v${request.outcome?.at}`; }
@@ -137,7 +153,7 @@ export class Service {
       thread ??= await this.chat.fetchThread(msg.channel, msg.thread_ts, this.config.brain.thread_context_messages);
       // The brain sees names, never ids.
       const named = [];
-      for (const m of thread) named.push({ user: m.user === this.chat.botUserId ? (this.chat.appName ?? 'Lekam') : await this.chat.userName(m.user), text: m.text, ts: m.ts });
+      for (const m of thread) named.push({ user: await this.nameOf(m), text: m.text, ts: m.ts });
       const channelName = await this.chat.channelName(msg.channel);
       const cls = await this.brain.classify(
         { kind: msg.kind, requester: await this.chat.userName(msg.user), channel: channelName ? '#' + channelName : msg.dm ? `a direct message to ${this.ownerName(ownerId)}` : 'a direct message', text: msg.text, thread: named, approvedScope: request?.scope ?? null },
@@ -157,6 +173,12 @@ export class Service {
   // ---------- inbound messages ----------
   async onMessage(msg) {
     if (this.store.seen(msg.event_id)) { this.store.audit('duplicate_event', null, msg.user, { event_id: msg.event_id }); return; }
+    // The owner answering Lekam's clarifying question in the thread, untagged ("look at the thread, fix the failing test"):
+    // that is a reply to Lekam, not the owner talking to people. Picked up as a fresh mention with the whole thread.
+    if (msg.kind === 'owner_post' && !msg.via_app && !msg.is_dm && msg.thread_ts !== msg.ts && this.takeAnswer(msg)) {
+      this.store.audit('clarify_answered', null, msg.user, { channel: msg.channel, thread_ts: msg.thread_ts });
+      return this.onNew({ ...msg, kind: 'bot_mention', answer: true });
+    }
     if (!msg.is_dm && this.config.ownerIds.has(msg.user)) {
       // The owner's own message, typed or posted by an agent with the owner's account. Never acted on as a request:
       // bookkeeping, then session-post detection (which session posted it, so replies can come back to it).
@@ -182,6 +204,21 @@ export class Service {
     return this.onNew(msg);
   }
 
+  /** Lekam asked `user` something in this thread. */
+  noteAsked(channel, thread_ts, user) {
+    const now = Date.now();
+    for (const [k, v] of this.asked) if (now - v.at > ANSWER_WINDOW_MS) this.asked.delete(k);
+    this.asked.set(`${channel}:${thread_ts}`, { user, at: now });
+  }
+  /** True (once) when this message answers a question Lekam asked its author in the same thread. */
+  takeAnswer(msg) {
+    const k = `${msg.channel}:${msg.thread_ts}`;
+    const a = this.asked.get(k);
+    if (!a || a.user !== msg.user || Date.now() - a.at > ANSWER_WINDOW_MS) return false;
+    this.asked.delete(k);
+    return true;
+  }
+
   /** A message by the owner that Lekam didn't post. */
   async onOwnerPost(msg) {
     const w = this.store.activeWatchFor(msg.channel, msg.thread_ts);
@@ -189,22 +226,30 @@ export class Service {
     const r = this.store.findByThread(msg.channel, msg.thread_ts);
     // Posted as the owner through another app in a request's thread: maybe the request's agent skipping the Post step,
     // maybe the owner's own (manual) session. Detection tells them apart before the owner is told anything.
-    const flag = !!(msg.via_app && r?.card && r.owner === msg.user);
+    // Only a request that has an agent can have an agent skip its Post step. A request the owner ignored or denied never
+    // ran, so anything posted as the owner there is the owner (or one of their own sessions): never flagged.
+    const flag = !!(msg.via_app && r?.card && r.owner === msg.user && r.session_id);
     if (msg.via_app) this.store.audit('owner_post_via_other_app', r?.id ?? null, msg.user, { channel: msg.channel, ts: msg.ts, app: msg.via_app });
     else if (r) this.store.audit('owner_untagged_ignored', r.id, msg.user, { channel: msg.channel });
-    if (this.daemons && this.config.watches.detect.enabled) this.track(this.runDetection(msg).then((det) => (flag ? this.flagOtherAppPost(r, msg, det) : det)));
-    else if (flag) await this.flagOtherAppPost(r, msg, null);
+    if (this.daemons && this.config.watches.detect.enabled) this.track(this.runDetection(msg).then((det) => (flag ? this.flagOtherAppPost(r, msg, det, { detected: true }) : det)));
+    else if (flag) await this.flagOtherAppPost(r, msg, null, { detected: false });
   }
 
-  /** Tell the owner about a post as them in a request thread that Lekam didn't make, unless one of their own sessions made it. */
-  async flagOtherAppPost(r, msg, det) {
-    if (det?.agent && det.agent !== r.session_id && !det.lekam) {
-      this.store.audit('owner_post_from_session', r.id, msg.user, { channel: msg.channel, ts: msg.ts, agent: det.agent, host: det.host });
+  /**
+   * Tell the owner when the request's own agent posted as them in its thread (skipping the Post step). With detection on
+   * that needs a positive match: the request's agent is a Paseo session, so detection finds it when it posted. Posts
+   * matched to another session, or to none (the owner's manual pi/Claude/AI Bot sessions, which aren't Paseo agents),
+   * are the owner's own and are not flagged. Without detection, only a request that is still live is flagged.
+   */
+  async flagOtherAppPost(r, msg, det, { detected = true } = {}) {
+    const own = det?.agent && det.agent === r.session_id;
+    if (detected ? !own : !isEngaged(this.store.getRequest(r.id)?.state ?? r.state)) {
+      this.store.audit(det?.agent ? 'owner_post_from_session' : 'owner_post_unattributed', r.id, msg.user, { channel: msg.channel, ts: msg.ts, agent: det?.agent ?? null, host: det?.host ?? null });
       return det;
     }
     const link = await this.chat.permalink(msg.channel, msg.ts);
     const view = link ? ` (<${link}|view>)` : '';
-    const text = det?.agent && det.agent === r.session_id
+    const text = own
       ? `This request's agent posted as you in its thread itself${view}, skipping your Post step. I haven't acted on it.`
       : `Something was posted as you in this request's thread by another app, not through Lekam${view}. If it was the agent, it skipped your Post step. I haven't acted on it.`;
     await this.toOwner(r, `${this.nudge(r)}${text}`).catch(() => {});
@@ -225,7 +270,7 @@ export class Service {
     const thread = await this.chat.fetchThread(msg.channel, msg.thread_ts, this.config.brain.thread_context_messages);
     const cls = await this.classify(msg, { ownerId: owner.slack_id, thread });
     // Kept for the card (last two) and the agent's brief (all of it): who asked whom matters.
-    if (cls) cls.thread_excerpt = thread.filter((m) => m.ts !== msg.ts && m.user !== this.chat.botUserId).slice(-8);
+    if (cls) cls.thread_excerpt = excerptOf(thread, { skipTs: msg.ts, botUserId: this.chat.botUserId });
     const d = decideNew(msg, cls, this.config);
     this.store.audit('decision', null, msg.user, { kind: msg.kind, decision: d.type, reason: d.reason ?? null, intent: cls?.intent ?? null, confidence: cls?.confidence ?? null });
     switch (d.type) {
@@ -233,6 +278,7 @@ export class Service {
       case 'clarify': {
         await this.post(msg.channel, msg.thread_ts, d.question);
         await this.chat.react(msg.channel, msg.ts, this.config.chat.reactions.needs_info);
+        this.noteAsked(msg.channel, msg.thread_ts, msg.user);
         return;
       }
       case 'ignore': return;
@@ -246,7 +292,7 @@ export class Service {
       intent: 'task_request', addressed_to_owner: true, actionable: true, confidence: 0, urgent: false, brain_unavailable: true, followup: null, clarifying_question: null,
       reply_to_user: msg.kind === 'bot_mention' ? `I've passed this to ${ownerForChannel(this.config, msg.channel)?.name ?? 'the owner'}; I'll post back here.` : null,
       brief: { summary: msg.text.slice(0, 300), skill: null, repo: null, outward_actions: [], notes: 'Not pre-read: the brain was unavailable. Read the thread for context.' },
-      thread_excerpt: thread.filter((m) => m.ts !== msg.ts && m.user !== this.chat.botUserId).slice(-8),
+      thread_excerpt: excerptOf(thread, { skipTs: msg.ts, botUserId: this.chat.botUserId }),
     };
   }
 
@@ -568,7 +614,7 @@ export class Service {
     try {
       const thread = await this.chat.fetchThread(msg.channel, watch.is_dm ? msg.thread_ts : watch.thread_ts, this.config.brain.thread_context_messages);
       const named = [];
-      for (const m of thread) named.push({ user: m.user === this.chat.botUserId ? (this.chat.appName ?? 'Lekam') : await this.chat.userName(m.user), text: m.text, ts: m.ts });
+      for (const m of thread) named.push({ user: await this.nameOf(m), text: m.text, ts: m.ts });
       const channelName = await this.chat.channelName(msg.channel);
       return await this.brain.classify(
         { kind: 'watch_reply', requester: await this.chat.userName(msg.user), channel: channelName ? '#' + channelName : `a direct message to ${this.ownerName(watch.owner)}`, text: msg.text, thread: named, watchedSession: watch.title || 'an agent session' },

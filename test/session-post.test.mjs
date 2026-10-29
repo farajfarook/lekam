@@ -151,10 +151,26 @@ test('a post as the owner in a request thread is flagged only when it isn\'t fro
   assert.equal(flags().length, 1);
   assert.match(flags()[0].text, /request's agent posted as you .* skipping your Post step/);
 
-  // No session found: flagged as before.
+  // No session found (the owner's own non-Paseo session, e.g. pi CLI or AI Bot): the request's agent would have been
+  // found, so this is the owner. Not flagged.
   const t3 = `${base}.003000`;
   timelines.mine = [];
   await viaApp(t3, 'from somewhere else');
-  assert.equal(flags().length, 2);
-  assert.match(flags()[1].text, /by another app, not through Lekam/);
+  assert.equal(flags().length, 1, 'unmatched post not flagged');
+  assert.ok(h.store.auditTail(10).some((r) => r.type === 'owner_post_unattributed'));
+});
+
+test('a post as the owner in the thread of a request that never ran (ignored/denied) is never flagged', async () => {
+  const base = Math.floor(Date.now() / 1000);
+  const h = await harness({ watchAgents: {}, timelines: {} });
+  const m = await h.chat.inject({ kind: 'owner_mention', owner: OWNER, channel: CHAN, user: REQ, text: '@name:UOWNER where are the legacy settings?' });
+  const req = h.store.findByThread(CHAN, m.thread_ts);
+  await h.chat.click(ACTIONS.IGNORE, req.id, OWNER, h.chat.dms[0]); await settle(h);
+  const dms = h.chat.dms.length;
+  const text = 'Hi Aditya, the flash of hidden tabs is fixed on Test';
+  await h.chat.inject({ kind: 'owner_post', owner: OWNER, channel: CHAN, thread_ts: m.thread_ts, user: OWNER, via_app: 'AAIBOT', text, raw_text: text, ts: `${base}.004000`, hints: FOOTER }); await settle(h);
+  assert.equal(h.chat.dms.length, dms, 'no flag DM');
+  h.config.watches.detect.enabled = false;
+  await h.chat.inject({ kind: 'owner_post', owner: OWNER, channel: CHAN, thread_ts: m.thread_ts, user: OWNER, via_app: 'AAIBOT', text: 'more', raw_text: 'more', ts: `${base}.005000`, hints: FOOTER }); await settle(h);
+  assert.equal(h.chat.dms.length, dms, 'no flag DM without detection either');
 });

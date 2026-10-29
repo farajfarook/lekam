@@ -30,6 +30,33 @@ export async function renderMentions(text = '', nameOf = async (id) => id, { dro
   return unescapeSlack(out).replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').trim();
 }
 
+/** Subtypes whose messages carry content worth reading as thread context (webhook/CI posts arrive as bot_message). */
+const CONTENT_SUBTYPES = new Set(['thread_broadcast', 'bot_message', 'file_share', 'me_message']);
+export function isContentMessage(m) { return !m?.subtype || CONTENT_SUBTYPES.has(m.subtype); }
+
+/**
+ * Pure: the readable text of a message. Apps put the detail in blocks and attachments and only a short fallback in
+ * `text` (a CI post: "suite failed" in text, branch/commit/build links in blocks). People's messages carry rich_text
+ * blocks that just repeat `text`, so those are skipped. Lines already present are not repeated.
+ */
+export function messageText(m = {}) {
+  const out = [];
+  const add = (s) => { const t = String(s ?? '').trim(); if (t && !out.some((o) => o.includes(t))) out.push(t); };
+  add(m.text);
+  const textOf = (o) => (typeof o === 'string' ? o : o?.text ?? '');
+  for (const b of m.blocks ?? []) {
+    if (b.type === 'header' || b.type === 'section') { add(textOf(b.text)); for (const f of b.fields ?? []) add(textOf(f)); }
+    else if (b.type === 'context') add((b.elements ?? []).map(textOf).filter(Boolean).join(' '));
+  }
+  for (const a of m.attachments ?? []) {
+    add(a.pretext); add(a.title_link ? `<${a.title_link}|${a.title ?? a.title_link}>` : a.title); add(a.text);
+    for (const f of a.fields ?? []) add(f.title ? `*${f.title}*\n${f.value ?? ''}` : f.value);
+    if (!a.text && !a.title && !a.fields?.length) add(a.fallback);
+  }
+  for (const f of m.files ?? []) add(`[file: ${f.name ?? f.title ?? 'attachment'}]`);
+  return out.join('\n');
+}
+
 /** Pure: a "Sent using <app>" context line, which apps posting with a user token often add. */
 export function hasAppFooter(blocks) {
   return Array.isArray(blocks) && blocks.some((b) => b?.type === 'context' && (b.elements ?? []).some((e) => /sent using/i.test(String(e?.text ?? ''))));
@@ -82,7 +109,7 @@ export class SlackAdapter {
     this.userTokens = userTokens; this.userClients = new Map(); // owner id -> WebClient posting as that owner
     this.echoes = []; // messages we posted as an owner; their message events must not come back in as the owner talking
     this.handlers = { message: null, action: null, view: null, isEngaged: () => false };
-    this.userNames = new Map(); this.channelNames = new Map();
+    this.userNames = new Map(); this.channelNames = new Map(); this.botNames = new Map();
   }
 
   onMessage(fn) { this.handlers.message = fn; }
@@ -209,9 +236,14 @@ export class SlackAdapter {
   async fetchThread(channel, thread_ts, limit = 20) {
     try {
       const r = await this.withAccess((c) => c.conversations.replies({ channel, ts: thread_ts, limit: Math.min(limit, 100) }));
-      const msgs = (r.messages ?? []).filter((m) => !m.subtype || m.subtype === 'thread_broadcast').slice(-limit);
+      // Bot posts stay in: a thread under a CI/alert post is about that post (it used to be dropped as bot_message).
+      const msgs = (r.messages ?? []).filter(isContentMessage).slice(-limit);
       const out = [];
-      for (const m of msgs) out.push({ user: m.user ?? m.bot_id ?? '?', text: await renderMentions(m.text ?? '', (id) => this.userName(id)), ts: m.ts });
+      for (const m of msgs) {
+        const row = { user: m.user ?? m.bot_id ?? '?', text: await renderMentions(messageText(m), (id) => this.userName(id)), ts: m.ts };
+        if (!m.user && m.bot_id) row.name = m.username || m.bot_profile?.name || await this.botName(m.bot_id);
+        out.push(row);
+      }
       return out;
     } catch (e) { this.log('warn', `fetchThread failed: ${e.message}`); return []; }
   }
@@ -239,6 +271,13 @@ export class SlackAdapter {
   async userName(id) {
     if (this.userNames.has(id)) return this.userNames.get(id);
     try { const u = await this.client.users.info({ user: id }); const n = u.user?.profile?.display_name || u.user?.real_name || id; this.userNames.set(id, n); return n; } catch { return id; }
+  }
+  async botName(id) {
+    if (this.botNames.has(id)) return this.botNames.get(id);
+    let n = 'a bot';
+    try { n = (await this.client.bots.info({ bot: id })).bot?.name || n; } catch {}
+    this.botNames.set(id, n);
+    return n;
   }
   async channelName(id) {
     if (this.channelNames.has(id)) return this.channelNames.get(id);

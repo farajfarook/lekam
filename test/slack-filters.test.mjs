@@ -99,3 +99,37 @@ test('owner posts carry the app hints Slack gives (as hints: they are inconsiste
   assert.equal(b.via_app, 'AMCP');
   assert.equal((await classifyEvent({ type: 'message', user: 'UOWN', channel: 'C', ts: '7', text: '<@UBOT> do it' }, ctx())).kind, 'bot_mention');
 });
+
+// A CI post under which people ask Lekam to fix things (a webhook post: subtype bot_message, detail only in blocks).
+const CI_POST = { subtype: 'bot_message', bot_id: 'BCI', ts: '100.1', text: ':x: My Stay full suite failed: No scenario counts (the run did not reach the reporter).', blocks: [
+  { type: 'header', text: { type: 'plain_text', text: ':x: My Stay full suite failed' } },
+  { type: 'section', fields: [{ type: 'mrkdwn', text: '*Branch*\n`merge`' }, { type: 'mrkdwn', text: '*Commit*\n`a73382115021`' }] },
+  { type: 'section', text: { type: 'mrkdwn', text: ':bar_chart: <https://dev.azure.com/b?buildId=152770&amp;view=allure|Allure report> · <https://dev.azure.com/b?buildId=152770|Open the build>' } },
+  { type: 'context', elements: [{ type: 'mrkdwn', text: 'my-stay-test-gate · MyStay.Playwright.Full.20261029.2' }] },
+] };
+
+test('messageText reads app blocks and attachments, not rich_text echoes', async () => {
+  const { messageText } = await import('../src/chat/slack/adapter.mjs');
+  const t = messageText(CI_POST);
+  for (const s of ['suite failed: No scenario counts', '`merge`', 'a73382115021', 'buildId=152770', 'MyStay.Playwright.Full.20261029.2']) assert.ok(t.includes(s), s);
+  assert.equal(t.split('\n').filter((l) => l === ':x: My Stay full suite failed').length, 0, 'header already in text is not repeated');
+  assert.equal(messageText({ text: 'hi there', blocks: [{ type: 'rich_text', elements: [] }] }), 'hi there');
+  assert.equal(messageText({ text: '', attachments: [{ title: 'Build 12', title_link: 'https://x/12', text: 'failed', fields: [{ title: 'Stage', value: 'e2e' }] }] }), '<https://x/12|Build 12>\nfailed\n*Stage*\ne2e');
+});
+
+test('fetchThread keeps bot posts (CI alerts) with their bot name and block detail', async () => {
+  const a = new SlackAdapter({ ownerIds: new Set(['UOWN']) });
+  a.botUserId = 'UBOT';
+  a.client = {
+    conversations: { replies: async () => ({ messages: [CI_POST,
+      { user: 'UOWN', ts: '100.2', text: '<@UBOT> can u check and fix it' },
+      { subtype: 'channel_join', user: 'UX', ts: '100.3', text: '<@UX> has joined' }] }) },
+    bots: { info: async ({ bot }) => ({ bot: { name: bot === 'BCI' ? 'Azure Pipelines' : '?' } }) },
+    users: { info: async ({ user }) => ({ user: { profile: { display_name: NAMES[user] ?? user } } }) },
+  };
+  const t = await a.fetchThread('C', '100.1');
+  assert.equal(t.length, 2, 'join notice dropped, bot post kept');
+  assert.equal(t[0].name, 'Azure Pipelines');
+  assert.ok(t[0].text.includes('a73382115021') && t[0].text.includes('buildId=152770&view=allure'));
+  assert.equal(t[1].name, undefined);
+});
