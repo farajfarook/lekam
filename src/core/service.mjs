@@ -307,7 +307,10 @@ export class Service {
     request = this.store.transition(request.id, 'PENDING_APPROVAL');
     // Owner DM'd Lekam: the card replies under their message, so the whole session stays in that thread.
     const ownDm = msg.is_dm && msg.user === owner.slack_id;
-    const posted = await this.chat.dm(owner.slack_id, approvalCard(await this.cardArgs(request)), ownDm ? msg.thread_ts : undefined);
+    // The owner tagging Lekam IS the approval: the job starts at once and the card becomes its status card. The reply
+    // still waits for the owner (the result card's Post button), and posting/sending outward stays withheld.
+    const autoStart = this.ownerAutoStart(msg, owner, d);
+    const posted = await this.chat.dm(owner.slack_id, autoStart ? actionedCard(await this.cardArgs(request), 'Starting (you asked)') : approvalCard(await this.cardArgs(request)), ownDm ? msg.thread_ts : undefined);
     const card = { channel: posted.channel, ts: posted.ts, thread: ownDm ? msg.thread_ts : posted.ts };
     request = this.store.updateRequest(request.id, { card });
     if (msg.kind === 'bot_mention') {
@@ -315,6 +318,16 @@ export class Service {
       // "I've asked Faraj" is for other people; the owner asking gets the 👀 and the card.
       if (cls.reply_to_user && msg.user !== owner.slack_id) await this.post(msg.channel, msg.thread_ts, cls.reply_to_user);
     }
+    if (autoStart) {
+      const outward = Object.keys(this.config.outward_actions).filter((a) => !this.config.approvals.owner_withhold.includes(a));
+      request = this.store.updateRequest(request.id, { scope: { brief, outward_actions: outward }, approval_mode: 'task' });
+      this.store.transition(request.id, 'APPROVED', { actor: msg.user, data: { mode: 'task', outward, via: 'owner_tag' } });
+      return this.run(this.store.getRequest(request.id));
+    }
+  }
+  /** The owner tagged Lekam (or DM'd it) for work: no approval card. Brain-down requests still get one (no brief to run on). */
+  ownerAutoStart(msg, owner, d) {
+    return !!this.config.approvals.owner_auto_start && msg.kind === 'bot_mention' && msg.user === owner.slack_id && !d.brainDown;
   }
 
   async onFollowup(msg, request) {
@@ -580,7 +593,8 @@ export class Service {
     const link = this.exec(request.owner).agentLink(request.session_id);
     await this.updateCard(request, actionedCard(await this.cardArgs(request), `Failed: ${String(reason).slice(0, 200)}`, link ? [{ type: 'context', elements: [{ type: 'mrkdwn', text: `<${link}|open in Paseo>` }] }] : []));
     if (request.card) await this.toOwner(request, `${this.nudge(request)}Failed: ${String(reason).slice(0, 300)}${link ? ` · <${link}|open in Paseo>` : ''}`).catch(() => {});
-    if (request.kind === 'bot_mention') await this.post(request.channel, request.thread_ts, `That didn't go through (${String(reason).slice(0, 120)}). ${this.ownerName(request.owner)} has the details.`);
+    // The owner asked: they have the details in the DM; nothing goes to the thread without them.
+    if (request.kind === 'bot_mention' && request.requester !== request.owner) await this.post(request.channel, request.thread_ts, `That didn't go through (${String(reason).slice(0, 120)}). ${this.ownerName(request.owner)} has the details.`);
   }
 
   // ---------- thread watches ----------

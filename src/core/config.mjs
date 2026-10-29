@@ -29,7 +29,7 @@ function env(name, { required = true } = {}) {
 const DEFAULTS = {
   chat: { platform: 'slack', thread_engagement: '24h', owner_post_footer: true, reactions: { pending: 'eyes', running: 'gear', done: 'white_check_mark', declined: 'no_entry_sign', failed: 'x', needs_info: 'question' } },
   brain: { threshold: 0.7, thread_context_messages: 20, recent_outcomes: 10, catalogue_max_chars: 16000, timeout_ms: 30000, max_tokens: 2500 },
-  approvals: { ttl_bot_mention: '24h', ttl_owner_mention: '4h', outward_actions_mode: 'ask', force_card_patterns: ['\\bPR\\b', '\\bdeploy', '\\bmerge\\b', '\\bprod\\b', '\\bjira\\b', '\\bemail\\b', '\\bdelete\\b'] },
+  approvals: { ttl_bot_mention: '24h', ttl_owner_mention: '4h', outward_actions_mode: 'ask', owner_auto_start: true, owner_withhold: ['slack_post', 'email_send'], force_card_patterns: ['\\bPR\\b', '\\bdeploy', '\\bmerge\\b', '\\bprod\\b', '\\bjira\\b', '\\bemail\\b', '\\bdelete\\b'] },
   limits: { per_user_per_hour: 10, pending_per_owner: 20 },
   store: { path: './lekam.db' },
   outward_actions: {},
@@ -110,6 +110,7 @@ export function resolveConfig(raw, { baseDir = process.cwd(), envLookup = env } 
   c.approvals.ttl_bot_mention_ms = parseDuration(c.approvals.ttl_bot_mention, 'approvals.ttl_bot_mention');
   c.approvals.ttl_owner_mention_ms = parseDuration(c.approvals.ttl_owner_mention, 'approvals.ttl_owner_mention');
   if (!['ask', 'proposed', 'all'].includes(c.approvals.outward_actions_mode)) throw new ConfigError('approvals.outward_actions_mode must be ask, proposed or all');
+  if (!Array.isArray(c.approvals.owner_withhold)) throw new ConfigError('approvals.owner_withhold must be a list of outward action ids');
   c.approvals.force_card_regexes = (c.approvals.force_card_patterns ?? []).map((p) => new RegExp(p, 'i'));
 
   // Files

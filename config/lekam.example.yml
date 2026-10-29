@@ -34,6 +34,8 @@ approvals:
   ttl_bot_mention: 24h
   ttl_owner_mention: 4h
   outward_actions_mode: ask              # ask = checkboxes per request; proposed = brief's actions allowed, shown as a line; all = agent may do anything (shown on the card)
+  owner_auto_start: true                 # the owner tagging Lekam starts the job with no approval card; the reply still waits for Post
+  owner_withhold: [slack_post, email_send] # outward actions NOT granted on those auto-started jobs (all others are)
   force_card_patterns:                   # regex; any match on a follow-up forces a new card
     - "\\bPR\\b"
     - "\\bdeploy"
@@ -52,6 +54,7 @@ store:
 
 # Outward actions the brain may propose and the owner approves per request.
 outward_actions:
+  jira_create: Create a Jira ticket
   jira_comment: Comment on Jira
   pr_create: Raise a pull request
   pr_review: Approve or review a pull request

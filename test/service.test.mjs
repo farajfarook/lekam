@@ -527,7 +527,7 @@ test('the thread root (a CI post) reaches the brain and the brief, and the owner
   await h.chat.inject({ kind: 'owner_post', owner: OWNER, channel: CHAN, thread_ts: root.ts, user: OWNER, text: 'Look at the thread fix the failing test', hints: {} });
   assert.equal(h.brain.calls.length, 2, 'answer classified');
   const req = h.store.findByThread(CHAN, root.ts);
-  assert.equal(req?.state, 'PENDING_APPROVAL', 'card opened');
+  assert.ok(req && req.state !== 'PENDING_APPROVAL', 'the owner asked: job started, no approval card');
   assert.equal(req.classification.thread_excerpt[0].ts, root.ts, 'CI post is in the brief excerpt');
   // Only once: the next untagged owner line in the thread is the owner talking again.
   const calls = h.brain.calls.length;
@@ -541,4 +541,32 @@ test('excerptOf keeps the thread root when the thread is long', async () => {
   const ex = excerptOf(thread, { skipTs: '14', botUserId: 'UBOT' });
   assert.equal(ex.length, 8); assert.equal(ex[0].ts, '0'); assert.equal(ex.at(-1).ts, '13');
   assert.ok(!ex.some((m) => m.user === 'UBOT'));
+});
+
+test('the owner tagging Lekam starts the job with no approval card; the reply still waits for Post; Slack/email withheld', async () => {
+  const h = await harness({ execScript: { start: 'Created AI-123.' }, config: testConfig({ outward_actions: { jira_create: 'Create a Jira ticket', jira_comment: 'Comment on Jira', slack_post: 'Post to Slack', email_send: 'Send email' } }) });
+  const m = await h.chat.inject({ kind: 'bot_mention', channel: CHAN, user: OWNER, text: 'create a jira to set up veracode for mcp server external' });
+  await tick();
+  const req = h.store.findByThread(CHAN, m.thread_ts);
+  assert.equal(h.exec.calls[0]?.[0], 'start', 'started without a click');
+  assert.deepEqual(h.exec.calls[0][1].allowed, ['jira_create', 'jira_comment']);
+  assert.ok(!JSON.stringify(h.chat.dms[0].blocks).includes(ACTIONS.APPROVE_TASK), 'status card, not an approval card');
+  assert.match(h.chat.dms[0].text, /Starting \(you asked\)/);
+  assert.equal(h.store.getRequest(req.id).state, 'DONE');
+  assert.equal(h.chat.posts.filter((p) => p.channel === CHAN).length, 0, 'nothing posted in the thread yet');
+  const result = h.chat.lastDm();
+  assert.ok(JSON.stringify(result.blocks).includes(ACTIONS.POST_RESULT), 'result waits for Post');
+  await h.chat.click(ACTIONS.POST_RESULT, req.id, OWNER, result); await tick();
+  assert.equal(h.chat.posts.at(-1).text.includes('Created AI-123.'), true);
+});
+
+test('owner_auto_start off, or someone else tagging Lekam: approval card as before', async () => {
+  const h = await harness({ config: testConfig({ approvals: { owner_auto_start: false } }) });
+  await h.chat.inject({ kind: 'bot_mention', channel: CHAN, user: OWNER, text: 'fix the export' });
+  assert.ok(JSON.stringify(h.chat.dms[0].blocks).includes(ACTIONS.APPROVE_TASK));
+  assert.equal(h.exec.calls.length, 0);
+  const h2 = await harness();
+  await h2.chat.inject({ kind: 'bot_mention', channel: CHAN, user: REQ, text: 'fix the export' });
+  assert.ok(JSON.stringify(h2.chat.dms[0].blocks).includes(ACTIONS.APPROVE_TASK));
+  assert.equal(h2.exec.calls.length, 0);
 });
