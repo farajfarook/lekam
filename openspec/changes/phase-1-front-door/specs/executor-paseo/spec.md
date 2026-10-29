@@ -102,8 +102,12 @@ Messages forwarded to a request's session SHALL be queued so that one turn finis
 - **THEN** the agent receives them one after the other and the owner sees two answers, not one answer twice
 
 ### Requirement: Posts as the owner that Lekam didn't make
-A message in a request's thread posted as the owner through another app (`via_app`) SHALL NOT be forwarded to the agent or treated as the owner talking. Lekam SHALL tell the owner in the session thread that something was posted as them outside the Post step, with a link. Posts Lekam makes as the owner SHALL NOT mark the thread as one Lekam is speaking in: people replying to them are talking to the owner.
+A message in a request's thread posted as the owner through another app (`via_app`) SHALL NOT be forwarded to the agent or treated as the owner talking. Lekam SHALL first run session-post detection on it: if the post came from one of the owner's own agent sessions that is not a Lekam request session (a manual session answering in the thread), Lekam SHALL NOT tell the owner, only audit it. Otherwise (the request's own agent, another Lekam session, no match, or detection off) Lekam SHALL tell the owner in the session thread that something was posted as them outside the Post step, with a link, naming the request's agent when it was the one that posted. Posts Lekam makes as the owner SHALL NOT mark the thread as one Lekam is speaking in: people replying to them are talking to the owner.
 
 #### Scenario: agent posts as the owner
 - **WHEN** an agent posts in the request thread with the owner's user token
 - **THEN** the post is not forwarded back to the agent, and the owner gets a note in the session thread
+
+#### Scenario: owner's manual session posts in the request thread
+- **WHEN** an agent session the owner started themselves (not a Lekam session) posts in the request thread with the owner's user token
+- **THEN** detection matches it to that session, the post is not forwarded to the request's agent, and the owner gets no note

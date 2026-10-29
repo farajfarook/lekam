@@ -123,3 +123,38 @@ test('owner posts never become requests, and detection can be switched off', asy
   await ownerPost(h, { text: '<@UPRIYA> hi' });
   assert.equal(h.daemons.calls.length, before);
 });
+
+test('a post as the owner in a request thread is flagged only when it isn\'t from one of the owner\'s own sessions', async () => {
+  const base = Math.floor(Date.now() / 1000);
+  const timelines = { manual: [], mine: [] };
+  const h = await harness({ execScript: { start: 'Report.', send: 'sent' }, watchAgents: { manual: { title: 'Manual session' }, mine: { labels: { lekam: '1' } } }, timelines });
+  h.chat.postAs = new Set([OWNER]);
+  const m = await h.chat.inject({ kind: 'owner_mention', owner: OWNER, channel: CHAN, user: REQ, text: '@name:UOWNER why no legacy settings?' });
+  const req = h.store.findByThread(CHAN, m.thread_ts);
+  await h.chat.click(ACTIONS.DELEGATE, req.id, OWNER, h.chat.dms[0]);
+  await settle(h);
+  h.store.setSession(req.id, 'mine');
+  const viaApp = async (ts, text) => { await h.chat.inject({ kind: 'owner_post', owner: OWNER, channel: CHAN, thread_ts: m.thread_ts, user: OWNER, via_app: 'AAIBOT', text, raw_text: text, ts, hints: FOOTER }); await settle(h); };
+  const flags = () => h.chat.dms.filter((d) => /posted as you/.test(d.text ?? ''));
+
+  // The owner's manual session answered in the thread: nothing to flag.
+  const t1 = `${base}.001000`;
+  timelines.manual = sent(CHAN, t1, 'Hi Aditya, 22742 is on the redirect flag');
+  await viaApp(t1, 'Hi Aditya, 22742 is on the redirect flag');
+  assert.equal(flags().length, 0, 'manual session post not flagged');
+  assert.ok(h.store.auditTail(10).some((r) => r.type === 'owner_post_from_session' && r.data.agent === 'manual'));
+
+  // The request's own agent posted itself: flagged as skipping the Post step.
+  const t2 = `${base}.002000`;
+  timelines.manual = []; timelines.mine = sent(CHAN, t2, 'done, see PR');
+  await viaApp(t2, 'done, see PR');
+  assert.equal(flags().length, 1);
+  assert.match(flags()[0].text, /request's agent posted as you .* skipping your Post step/);
+
+  // No session found: flagged as before.
+  const t3 = `${base}.003000`;
+  timelines.mine = [];
+  await viaApp(t3, 'from somewhere else');
+  assert.equal(flags().length, 2);
+  assert.match(flags()[1].text, /by another app, not through Lekam/);
+});

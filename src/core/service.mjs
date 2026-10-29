@@ -14,6 +14,8 @@ import { ACTIONS, WATCH_ACTIONS, approvalCard, actionedCard, investigatingCard, 
 const LIVE_REQUEST = new Set(['PENDING_APPROVAL', 'APPROVED', 'INVESTIGATING', 'RUNNING']);
 /** Watch replies don't need the skills/repos catalogue: keep that brain call small. */
 const WATCH_CATALOGUE = "(Not needed here: this is a reply in a conversation the owner's own agent session is waiting on. Propose no skills, repos or actions.)";
+/** One of Lekam's request sessions (labelled at creation, or known to the store). */
+const agentIsLekam = (agent, store) => agent.labels?.lekam !== undefined || !!store.requestBySession(agent.id);
 const NO_ACCESS = /not_in_channel|channel_not_found|missing_scope|not_allowed_token_type|is_archived/;
 
 export class Service {
@@ -185,15 +187,28 @@ export class Service {
     const w = this.store.activeWatchFor(msg.channel, msg.thread_ts);
     if (w) this.store.watchSeen(w.id, msg.ts); // most likely the waiting session posting again
     const r = this.store.findByThread(msg.channel, msg.thread_ts);
-    if (msg.via_app) {
-      // Posted as the owner through another app in a request's thread: the agent skipped the owner's Post step.
-      this.store.audit('owner_post_via_other_app', r?.id ?? null, msg.user, { channel: msg.channel, ts: msg.ts, app: msg.via_app });
-      if (r?.card && r.owner === msg.user) {
-        const link = await this.chat.permalink(msg.channel, msg.ts);
-        await this.toOwner(r, `${this.nudge(r)}Something was posted as you in this request's thread by another app, not through Lekam${link ? ` (<${link}|view>)` : ''}. If it was the agent, it skipped your Post step. I haven't acted on it.`).catch(() => {});
-      }
-    } else if (r) this.store.audit('owner_untagged_ignored', r.id, msg.user, { channel: msg.channel });
-    if (this.daemons && this.config.watches.detect.enabled) this.track(this.runDetection(msg));
+    // Posted as the owner through another app in a request's thread: maybe the request's agent skipping the Post step,
+    // maybe the owner's own (manual) session. Detection tells them apart before the owner is told anything.
+    const flag = !!(msg.via_app && r?.card && r.owner === msg.user);
+    if (msg.via_app) this.store.audit('owner_post_via_other_app', r?.id ?? null, msg.user, { channel: msg.channel, ts: msg.ts, app: msg.via_app });
+    else if (r) this.store.audit('owner_untagged_ignored', r.id, msg.user, { channel: msg.channel });
+    if (this.daemons && this.config.watches.detect.enabled) this.track(this.runDetection(msg).then((det) => (flag ? this.flagOtherAppPost(r, msg, det) : det)));
+    else if (flag) await this.flagOtherAppPost(r, msg, null);
+  }
+
+  /** Tell the owner about a post as them in a request thread that Lekam didn't make, unless one of their own sessions made it. */
+  async flagOtherAppPost(r, msg, det) {
+    if (det?.agent && det.agent !== r.session_id && !det.lekam) {
+      this.store.audit('owner_post_from_session', r.id, msg.user, { channel: msg.channel, ts: msg.ts, agent: det.agent, host: det.host });
+      return det;
+    }
+    const link = await this.chat.permalink(msg.channel, msg.ts);
+    const view = link ? ` (<${link}|view>)` : '';
+    const text = det?.agent && det.agent === r.session_id
+      ? `This request's agent posted as you in its thread itself${view}, skipping your Post step. I haven't acted on it.`
+      : `Something was posted as you in this request's thread by another app, not through Lekam${view}. If it was the agent, it skipped your Post step. I haven't acted on it.`;
+    await this.toOwner(r, `${this.nudge(r)}${text}`).catch(() => {});
+    return det;
   }
   track(p) { const q = p.catch((e) => this.log('warn', `session-post detection failed: ${e.message}`)); this.detections.add(q); q.finally(() => this.detections.delete(q)); return q; }
 
@@ -697,7 +712,10 @@ export class Service {
       }
       if (best?.m.how === 'ts') break;
     }
-    return best ? this.registerFromPost(msg, post, best) : null;
+    if (!best) return null;
+    // Which session it was (and whether it is one of Lekam's own) matters to the caller too: see flagOtherAppPost.
+    const lekam = agentIsLekam(best.agent, this.store);
+    return { ...this.registerFromPost(msg, post, best), agent: best.agent.id, host: best.host, lekam };
   }
 
   registerFromPost(msg, post, { host, agent, m }) {
