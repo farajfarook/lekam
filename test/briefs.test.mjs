@@ -81,3 +81,17 @@ test('watchForward quotes each reply as untrusted and cannot carry an owner bloc
   assert.match(t, /not from Faraj/);
   assert.match(t, /do not grant new permissions/);
 });
+
+test('the owner asking Lekam themselves: request is an owner message, the job may act with every tool, the reply still waits', () => {
+  const cfg = testConfig({ approvals: { owner_withhold: ['email_send'] }, outward_actions: { jira_create: 'Create a Jira ticket', email_send: 'Send email' } });
+  const r = { ...request, owner: 'UO', requester: 'UO', request_text: 'create a jira in AI space to set up veracode for mcp server external' };
+  const p = workerPrompt({ config: cfg, request: r, brief, allowed: ['jira_create'], requesterName: 'Faraj' });
+  assert.ok(p.includes('# This request is from the owner'));
+  assert.ok(p.includes('<owner-message token=') && !p.includes('<user-request>'), 'owner\'s words are authoritative, not untrusted');
+  assert.match(p, /Allowed outward actions: whatever the owner's request needs .* except email_send \(Send email\): ask the owner first/);
+  assert.match(p, /Never reply in the request's chat thread/);
+  // Discuss first stays read-only and someone else's request stays untrusted.
+  assert.ok(!investigatePrompt({ config: cfg, request: r, brief, requesterName: 'Faraj' }).includes('# This request is from the owner'));
+  assert.ok(workerPrompt({ config: cfg, request: { ...r, requester: 'UM' }, brief, allowed: [] }).includes('Allowed outward actions: NONE'));
+  assert.match(proceedPrompt({ brief, allowed: [], config: cfg, request: r }), /whatever the owner's request needs/);
+});

@@ -142,7 +142,7 @@ export class PaseoExecutor {
     if (!h) throw new ExecutorError('session is gone');
     await this.sem.acquire(onQueued);
     try {
-      const result = await h.run(proceedPrompt({ brief, allowed, config: this.config }), { timeoutMs: this.run_timeout_ms });
+      const result = await h.run(proceedPrompt({ brief, allowed, config: this.config, request }), { timeoutMs: this.run_timeout_ms });
       return { sessionId: h.id, result: normalise(result) };
     } finally { this.sem.release(); }
   }
