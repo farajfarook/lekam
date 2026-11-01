@@ -1,0 +1,27 @@
+%%{init: {"flowchart": {"wrappingWidth": 320, "nodeSpacing": 40, "rankSpacing": 45}, "themeVariables": {"fontSize": "17px"}}}%%
+flowchart TD
+    A(["<b>You</b> DM Lekam:<br/>forward a Slack message or paste its link,<br/>with or without a note"]) --> C{"New message or<br/>reply in a Lekam thread?"}
+
+    C -- "New message" --> D["<b>Lekam</b> starts a Paseo session<br/>with the link and your note"]
+    D --> E["<b>Session</b> reads the original<br/>Slack thread itself"]
+    E --> F{"Did you say<br/>what you want?"}
+    F -- "Yes" --> G["<b>Session</b> does it, with all<br/>your tools and skills.<br/>It posts to Slack itself if the job needs it"]
+    F -- "No" --> H["<b>Session</b> explains the thread<br/>and suggests the next step"]
+
+    C -- "Reply in thread" --> R["<b>Lekam</b> passes it to the same session"]
+    R --> G
+
+    G --> K["<b>Lekam</b> puts the session's reply<br/>in your DM thread<br/>(⚙️ while it works)"]
+    H --> K
+    K --> M{"You reply in<br/>the thread?"}
+    M -- "Yes" --> R
+    M -- "No" --> Z(["Done. The session stays in Paseo"])
+
+    classDef you fill:#dbeafe,stroke:#1d4ed8,color:#111;
+    classDef lekam fill:#fef3c7,stroke:#b45309,color:#111;
+    classDef session fill:#dcfce7,stroke:#15803d,color:#111;
+    classDef done fill:#e5e7eb,stroke:#4b5563,color:#111;
+    class A,M you;
+    class C,D,R,K lekam;
+    class E,F,G,H session;
+    class Z done;

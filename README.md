@@ -10,10 +10,9 @@
 
 That's all. Lekam posts nowhere except your DM threads with it, and only for its owner. Anything that has to go out to Slack (a reply in the original thread, a message to someone), the session posts itself with its own Slack tools.
 
-```
-you ──DM (forward + note)──▶ Lekam ──▶ Paseo session (all your tools and skills)
-you ◀──DM thread reply────── Lekam ◀── final message of each turn
-```
+![How Lekam works](docs/flow.png)
+
+Blue is you, yellow is Lekam, green is the Paseo session. Source: [`docs/flow.mmd`](docs/flow.mmd) (Mermaid).
 
 ## Run
 
