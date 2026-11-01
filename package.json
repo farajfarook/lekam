@@ -1,23 +1,20 @@
 {
   "name": "lekam",
-  "version": "0.1.0",
-  "description": "A human-gated front door for your coding agents. Chat in, approved Paseo agents out.",
+  "version": "2.0.0",
+  "description": "Chat with a Paseo agent session from a Slack DM. Forward a Slack message to Lekam and talk about it.",
   "license": "Apache-2.0",
   "type": "module",
-  "bin": { "lekam": "./src/cli.mjs" },
+  "bin": { "lekam": "./src/main.mjs" },
   "files": ["src", "config", "README.md", "LICENSE"],
   "engines": { "node": ">=22.13" },
   "scripts": {
     "test": "node --no-warnings --test --test-reporter=spec \"test/**/*.test.mjs\"",
-    "start": "node src/cli.mjs run",
-    "check": "node src/cli.mjs check"
+    "start": "node --no-warnings src/main.mjs"
   },
   "dependencies": {
     "@getpaseo/client": "^0.13.0",
-    "@slack/bolt": "^5.1.0",
-    "@slack/web-api": "^8.2.0",
-    "yaml": "^2.8.0"
+    "@slack/bolt": "^5.1.0"
   },
   "repository": { "type": "git", "url": "https://github.com/farajfarook/lekam.git" },
-  "keywords": ["slack", "slack-bot", "paseo", "coding-agents", "human-in-the-loop", "approval", "orchestrator"]
+  "keywords": ["slack", "slack-bot", "paseo", "coding-agents"]
 }

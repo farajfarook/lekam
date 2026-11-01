@@ -1,6 +1,6 @@
 display_information:
   name: Faraj's Lekam
-  description: The front door for our coding agents. Ask here; the owner approves; agents do the work.
+  description: Chat with your Paseo agents from Slack. Forward a message to Lekam and talk about it.
   background_color: "#1f2937"
 features:
   app_home:
@@ -12,33 +12,16 @@ features:
 oauth_config:
   scopes:
     bot:
-      - app_mentions:read
-      - channels:history
-      - channels:read
-      - groups:history
-      - groups:read
-      - im:history
-      - im:write
-      - chat:write
-      - reactions:write
-      - reactions:read
-      - users:read
-    user:
-      - chat:write          # optional: lets owner-approved replies to owner-tags post as the owner
-      - im:history          # optional (capture_dms): read the DMs people send the owner
+      - im:history       # read the owner's DMs with Lekam
+      - chat:write       # reply in those DM threads
+      - reactions:write  # the ⚙️ while a session works
+      - users:read       # the owner's name for the session
 settings:
   event_subscriptions:
     bot_events:
-      - app_mention
-      - message.channels
-      - message.groups
       - message.im
-      - member_joined_channel
-      - member_left_channel
-    user_events:
-      - message.im          # optional (capture_dms): DMs people send the owner
   interactivity:
-    is_enabled: true
+    is_enabled: false
   org_deploy_enabled: false
   socket_mode_enabled: true
   token_rotation_enabled: false
