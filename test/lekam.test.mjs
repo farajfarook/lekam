@@ -55,7 +55,8 @@ function fakes({ found = null } = {}) {
   const slack = { react: async (c, ts, n) => reacts.push(['+', ts, n]), unreact: async (c, ts, n) => reacts.push(['-', ts, n]), reply: async (c, t, text) => posts.push({ c, t, text }) };
   const sessions = {
     find: async (thread) => { calls.push(['find', thread]); return found; },
-    start: async (thread, o) => { calls.push(['start', thread, o]); return handle('A1'); },
+    chooseHost: async (note) => { calls.push(['choose', note]); return 'orange'; },
+    start: async (thread, o) => { calls.push(['start', thread, o]); return { handle: handle('A1'), host: o.host }; },
     link: (id) => `paseo://agent/${id}`,
   };
   return { posts, reacts, calls, slack, sessions };
@@ -69,7 +70,8 @@ test('a forward starts a session; replies in the DM thread continue it; answers 
   assert.equal(start[1], '200.1', 'session keyed on the DM thread');
   assert.match(start[2].prompt, /fix the failing test/);
   assert.equal(f.posts[0].t, '200.1');
-  assert.match(f.posts[0].text, /^\*Done\*: see <x>\n\n_<paseo:\/\/agent\/A1\|open in Paseo>_$/);
+  assert.equal(start[2].host, 'orange', 'host from chooseHost');
+  assert.match(f.posts[0].text, /^\*Done\*: see <x>\n\n_<paseo:\/\/agent\/A1\|open in Paseo> · on orange_$/);
   assert.deepEqual(f.reacts, [['+', '200.1', 'gear'], ['-', '200.1', 'gear']]);
   await lekam.onDm({ ...FWD, ts: '200.2', thread_ts: '200.1', text: 'go ahead', attachments: [] });
   assert.deepEqual(f.calls.at(-1), ['run', 'A1', 'go ahead']);
@@ -78,7 +80,7 @@ test('a forward starts a session; replies in the DM thread continue it; answers 
 });
 
 test('after a restart the thread finds its session again by label', async () => {
-  const f = fakes({ found: { id: 'OLD', run: async (t) => ({ status: 'idle', lastMessage: `old: ${t}` }) } });
+  const f = fakes({ found: { host: 'banana', handle: { id: 'OLD', run: async (t) => ({ status: 'idle', lastMessage: `old: ${t}` }) } } });
   await new Lekam(f).onDm({ ...FWD, ts: '300.2', thread_ts: '300.1', text: 'and now?', attachments: [] });
   assert.ok(!f.calls.some((c) => c[0] === 'start'));
   assert.equal(f.posts[0].text, 'old: and now?');
@@ -89,7 +91,7 @@ test('turns in one thread run one at a time; failures are reported in the thread
   const order = [];
   let release;
   const gate = new Promise((r) => { release = r; });
-  f.sessions.start = async () => ({ id: 'A2', waitForFinish: async () => { order.push('first'); await gate; return { status: 'idle', lastMessage: 'one' }; }, run: async () => { order.push('second'); return { status: 'idle', lastMessage: 'two' }; } });
+  f.sessions.start = async () => ({ host: 'banana', handle: { id: 'A2', waitForFinish: async () => { order.push('first'); await gate; return { status: 'idle', lastMessage: 'one' }; }, run: async () => { order.push('second'); return { status: 'idle', lastMessage: 'two' }; } } });
   const lekam = new Lekam(f);
   const a = lekam.onDm(FWD);
   const b = lekam.onDm({ ...FWD, ts: '200.3', thread_ts: '200.1', text: 'also this', attachments: [] });
@@ -119,22 +121,54 @@ test('titles are short and readable', () => {
   assert.ok(title(parseDm({ text: 'x'.repeat(200) })).length <= 50);
 });
 
-test('a new session gets its own titled workspace with the Lekam label (created if missing)', async () => {
+test('a new session gets its own titled workspace on the chosen host, with the Lekam label (created if missing)', async () => {
   const { Sessions } = await import('../src/paseo.mjs');
   const calls = [];
   const labels = [{ name: 'Other', color: 'red' }];
-  const client = {
-    connect: async () => {},
-    workspaces: { create: async (o) => { calls.push(['ws', o]); return { id: 'wks_1', agents: { create: async (a) => { calls.push(['agent', a]); return { id: 'A1' }; } } }; } },
-  };
-  const labelClient = { connect: async () => {}, listWorkspaceLabels: async () => ({ labels }), setWorkspaceLabel: async (o) => { calls.push(['label', o]); } };
-  const s = new Sessions({ url: 'ws://x', provider: 'pi/m', cwd: '/tmp/lekam-test-cwd', createClient: async () => client, createLabelClient: async () => labelClient });
-  const h = await s.start('200.1', { title: 'Fix the failing test', prompt: 'p' });
-  assert.equal(h.id, 'A1');
-  assert.deepEqual(calls[0], ['ws', { source: { kind: 'directory', path: '/tmp/lekam-test-cwd' }, title: 'Fix the failing test' }]);
-  assert.deepEqual(calls[1][1].labels, { lekam: 'dm', lekam_thread: '200.1' });
-  assert.deepEqual(calls[2], ['label', { workspaceId: 'wks_1', label: { name: 'Lekam', color: 'amber' }, assigned: true }]);
+  const connect = async ({ name }) => ({
+    api: { workspaces: { create: async (o) => { calls.push(['ws', name, o]); return { id: `wks_${name}`, agents: { create: async (a) => { calls.push(['agent', name, a]); return { id: 'A1' }; } } }; } } },
+    daemon: { listWorkspaceLabels: async () => ({ labels }), setWorkspaceLabel: async (o) => { calls.push(['label', name, o]); } },
+  });
+  const s = new Sessions({ hosts: [{ name: 'banana', target: 'ws://x' }, { name: 'orange', target: 'ssh://root@orange' }], provider: 'pi/m', cwd: '/w', connect, mkdir: async (h) => calls.push(['mkdir', h.name]) });
+  const r = await s.start('200.1', { title: 'Fix the failing test', prompt: 'p', host: 'orange' });
+  assert.deepEqual([r.handle.id, r.host], ['A1', 'orange']);
+  assert.deepEqual(calls[0], ['mkdir', 'orange']);
+  assert.deepEqual(calls[1], ['ws', 'orange', { source: { kind: 'directory', path: '/w' }, title: 'Fix the failing test' }]);
+  assert.deepEqual(calls[2][2].labels, { lekam: 'dm', lekam_thread: '200.1' });
+  assert.deepEqual(calls[3], ['label', 'orange', { workspaceId: 'wks_orange', label: { name: 'Lekam', color: 'amber' }, assigned: true }]);
   labels.push({ name: 'lekam', color: 'teal' });
-  await s.start('200.2', { title: 't', prompt: 'p' });
-  assert.deepEqual(calls.at(-1)[1].label, { name: 'lekam', color: 'teal' }, 'an existing label keeps its name and colour');
+  await s.start('200.2', { title: 't', prompt: 'p', host: 'banana' });
+  assert.deepEqual(calls.at(-1)[2].label, { name: 'lekam', color: 'teal' }, 'an existing label keeps its name and colour');
+});
+
+test('host choice: named in the note wins, else free capacity, else the first host', async () => {
+  const { Sessions, hostInNote, parseHosts } = await import('../src/paseo.mjs');
+  const { bestHost } = await import('../src/capacity.mjs');
+  const hosts = parseHosts('banana=ws://127.0.0.1:6767/ws, orange=ssh://root@orange.internal');
+  assert.deepEqual(hosts.map((h) => h.name), ['banana', 'orange']);
+  assert.equal(hostInNote('fix it on banana please', ['banana', 'orange']), 'banana');
+  assert.equal(hostInNote('the orange build failed', ['banana', 'orange']), null, 'a bare mention is not a choice');
+  let best = 'orange';
+  const s = new Sessions({ hosts, provider: 'p', cwd: '/w', pickHost: async () => best, connect: async () => ({}) });
+  assert.equal(await s.chooseHost('Run this ON BANANA'), 'banana');
+  assert.equal(await s.chooseHost('fix it'), 'orange');
+  best = null; assert.equal(await s.chooseHost('fix it'), 'banana');
+  best = 'mars'; assert.equal(await s.chooseHost('fix it'), 'banana');
+  assert.equal(bestHost({ best: 'orange', hosts: [] }, ['banana', 'orange']), 'orange');
+  assert.equal(bestHost({ best: null, hosts: [{ name: 'banana', ok: true, slots: 1 }, { name: 'orange', ok: true, slots: 0 }] }, ['banana', 'orange']), 'banana');
+  assert.equal(bestHost({ best: null, hosts: [{ name: 'banana', ok: true, slots: 0 }] }, ['banana']), null);
+});
+
+test('find looks on every host and skips one that is down', async () => {
+  const { Sessions } = await import('../src/paseo.mjs');
+  const connect = async ({ name }) => {
+    if (name === 'banana') throw new Error('down');
+    return { api: { agents: {
+      list: async () => ({ entries: [{ agent: { id: 'A9' } }] }),
+      ref: (id) => ({ id, refresh: async () => ({ agent: { id, status: 'idle' } }) }),
+    } } };
+  };
+  const s = new Sessions({ hosts: [{ name: 'banana', target: 'ws://x' }, { name: 'orange', target: 'ssh://root@o' }], provider: 'p', cwd: '/w', connect });
+  const r = await s.find('200.1');
+  assert.deepEqual([r.host, r.handle.id], ['orange', 'A9']);
 });

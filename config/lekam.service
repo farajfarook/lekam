@@ -11,6 +11,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=%h/lekam
 Environment=LEKAM_OWNER=U0000000000
+Environment=LEKAM_HOSTS=this=ws://127.0.0.1:6767/ws,other=ssh://root@other.internal
 ExecStart=/bin/bash -lc '. $HOME/.agents/env.local.sh && exec node --no-warnings %h/lekam/src/main.mjs'
 Restart=always
 RestartSec=5

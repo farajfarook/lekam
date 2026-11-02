@@ -11,7 +11,7 @@ export class Lekam {
   constructor({ slack, sessions, ownerName = 'the owner', timeoutMs = 2 * 36e5, log = () => {} }) {
     Object.assign(this, { slack, sessions, ownerName, timeoutMs, log });
     this.queues = new Map(); // DM thread -> tail of its turn queue (one turn at a time per thread)
-    this.handles = new Map(); // DM thread -> Paseo agent handle
+    this.handles = new Map(); // DM thread -> { handle, host } (its Paseo agent and where it runs)
   }
 
   /** An owner DM: a new thread starts a session, a reply in a thread continues it. */
@@ -28,17 +28,19 @@ export class Lekam {
   async turn(m, thread, p) {
     await this.slack.react(m.channel, m.ts, WORKING);
     try {
-      let h = this.handles.get(thread) ?? await this.sessions.find(thread);
+      let s = this.handles.get(thread) ?? await this.sessions.find(thread);
       let result; let started = false;
-      if (h) {
-        result = await h.run(followupPrompt(p), { timeoutMs: this.timeoutMs });
+      if (s) {
+        this.handles.set(thread, s);
+        result = await s.handle.run(followupPrompt(p), { timeoutMs: this.timeoutMs });
       } else {
-        h = await this.sessions.start(thread, { title: title(p), prompt: firstPrompt(p, { ownerName: this.ownerName }) });
+        const host = await this.sessions.chooseHost(p.note);
+        s = await this.sessions.start(thread, { title: title(p), prompt: firstPrompt(p, { ownerName: this.ownerName }), host });
+        this.handles.set(thread, s);
         started = true;
-        result = await h.waitForFinish(this.timeoutMs);
+        result = await s.handle.waitForFinish(this.timeoutMs);
       }
-      this.handles.set(thread, h);
-      await this.slack.reply(m.channel, thread, this.render(result, h.id, { started }));
+      await this.slack.reply(m.channel, thread, this.render(result, s.handle.id, { started, host: s.host }));
     } catch (e) {
       this.log('error', `turn failed in ${thread}: ${e.stack ?? e}`);
       this.handles.delete(thread);
@@ -48,8 +50,8 @@ export class Lekam {
     }
   }
 
-  render(r, id, { started = false } = {}) {
-    const link = `<${this.sessions.link(id)}|open in Paseo>`;
+  render(r, id, { started = false, host = null } = {}) {
+    const link = `<${this.sessions.link(id)}|open in Paseo>${host ? ` · on ${host}` : ''}`;
     switch (r?.status) {
       case 'idle': return `${toMrkdwn(r.lastMessage || '') || '_(no reply)_'}${started ? `\n\n_${link}_` : ''}`;
       case 'permission': return `The session is waiting for a permission decision: ${link}`;
