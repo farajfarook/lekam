@@ -32,8 +32,21 @@ export function followupPrompt(p) {
   return [p.note || null, ctx || null].filter(Boolean).join('\n\n');
 }
 
-/** A short session title for Paseo. */
-export function title(p) {
-  const t = p.note || p.forwards[0]?.text || p.forwards[0]?.url || 'Slack DM';
-  return `Lekam: ${t.replace(/\s+/g, ' ').slice(0, 70)}`;
+/** Slack markup, emoji codes and links out: what's left reads as plain words. */
+const plain = (s) => String(s ?? '').split('\n').find((l) => l.trim()) ?? '';
+const clean = (s) => plain(s)
+  .replace(/<[^|>]+\|([^>]+)>/g, '$1').replace(/<[^>]+>/g, '').replace(/https?:\/\/\S+/g, '')
+  .replace(/:[a-z0-9_+-]+:/gi, '').replace(/[*_~`>]/g, '').replace(/\s+/g, ' ').trim();
+const cut = (s, n) => {
+  if (s.length <= n) return s;
+  const sp = s.lastIndexOf(' ', n - 1);
+  return `${s.slice(0, sp > n / 2 ? sp : n - 1).trim()}…`;
+};
+
+/** A short, readable session title for Paseo: your note, the forwarded message, or both when the note is short. */
+export function title(p, max = 50) {
+  const note = clean(p.note);
+  const fwd = clean(p.forwards[0]?.text);
+  const t = note && fwd && note.length < 30 ? `${note} – ${fwd}` : note || fwd || p.files[0]?.name || 'Slack message';
+  return cut(t.charAt(0).toUpperCase() + t.slice(1), max);
 }

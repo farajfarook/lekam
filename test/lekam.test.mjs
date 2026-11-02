@@ -31,7 +31,7 @@ test('prompts: do what he asked, or suggest the next step when he asked nothing'
   const bare = firstPrompt(parseDm({ ...FWD, text: '' }), { ownerName: 'Faraj' });
   assert.match(bare, /didn't say what he wants.*suggest the next step/s);
   assert.equal(followupPrompt(parseDm({ text: 'go ahead' })), 'go ahead');
-  assert.equal(title(parseDm(FWD)), 'Lekam: fix the failing test');
+  assert.equal(title(parseDm(FWD)), 'Fix the failing test – My Stay full suite failed…');
 });
 
 test('only the owner\'s own DM messages count', () => {
@@ -109,4 +109,32 @@ test('non-idle results point to Paseo', () => {
   assert.match(l.render({ status: 'permission' }, 'A'), /waiting for a permission decision: <paseo:\/\/agent\/A\|open in Paseo>/);
   assert.match(l.render({ status: 'timeout' }, 'A'), /Still working after 60 min/);
   assert.match(l.render({ status: 'error', error: 'boom' }, 'A'), /error: boom/);
+});
+
+test('titles are short and readable', () => {
+  assert.equal(title(parseDm({ ...FWD, text: '' })), 'My Stay full suite failed & more');
+  assert.equal(title(parseDm({ text: 'can you create a jira in AI space to setup veracode for mcp server external look at the example of corepms' })), 'Can you create a jira in AI space to setup…');
+  assert.equal(title(parseDm({ text: 'see <https://rms.slack.com/archives/C1/p123456|this>' })), 'See');
+  assert.equal(title(parseDm({ text: '<https://rms.slack.com/archives/C1/p123456>' })), 'Slack message');
+  assert.ok(title(parseDm({ text: 'x'.repeat(200) })).length <= 50);
+});
+
+test('a new session gets its own titled workspace with the Lekam label (created if missing)', async () => {
+  const { Sessions } = await import('../src/paseo.mjs');
+  const calls = [];
+  const labels = [{ name: 'Other', color: 'red' }];
+  const client = {
+    connect: async () => {},
+    workspaces: { create: async (o) => { calls.push(['ws', o]); return { id: 'wks_1', agents: { create: async (a) => { calls.push(['agent', a]); return { id: 'A1' }; } } }; } },
+  };
+  const labelClient = { connect: async () => {}, listWorkspaceLabels: async () => ({ labels }), setWorkspaceLabel: async (o) => { calls.push(['label', o]); } };
+  const s = new Sessions({ url: 'ws://x', provider: 'pi/m', cwd: '/tmp/lekam-test-cwd', createClient: async () => client, createLabelClient: async () => labelClient });
+  const h = await s.start('200.1', { title: 'Fix the failing test', prompt: 'p' });
+  assert.equal(h.id, 'A1');
+  assert.deepEqual(calls[0], ['ws', { source: { kind: 'directory', path: '/tmp/lekam-test-cwd' }, title: 'Fix the failing test' }]);
+  assert.deepEqual(calls[1][1].labels, { lekam: 'dm', lekam_thread: '200.1' });
+  assert.deepEqual(calls[2], ['label', { workspaceId: 'wks_1', label: { name: 'Lekam', color: 'amber' }, assigned: true }]);
+  labels.push({ name: 'lekam', color: 'teal' });
+  await s.start('200.2', { title: 't', prompt: 'p' });
+  assert.deepEqual(calls.at(-1)[1].label, { name: 'lekam', color: 'teal' }, 'an existing label keeps its name and colour');
 });
