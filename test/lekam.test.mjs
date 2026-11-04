@@ -51,7 +51,7 @@ test('long replies are split on line breaks', () => {
 
 function fakes({ found = null } = {}) {
   const posts = []; const reacts = []; const calls = [];
-  const handle = (id) => ({ id, waitForFinish: async () => ({ status: 'idle', lastMessage: '**Done**: see <x>' }), run: async (text) => { calls.push(['run', id, text]); return { status: 'idle', lastMessage: `reply to ${text}` }; } });
+  const handle = (id) => ({ id, waitForFinish: async () => ({ status: 'idle', lastMessage: '**Done**: see <x>' }), run: async (text, o) => { calls.push(['run', id, text, o?.activeTurnBehavior]); return { status: 'idle', lastMessage: `reply to ${text}` }; } });
   const slack = { react: async (c, ts, n) => reacts.push(['+', ts, n]), unreact: async (c, ts, n) => reacts.push(['-', ts, n]), reply: async (c, t, text) => posts.push({ c, t, text }) };
   const sessions = {
     find: async (thread) => { calls.push(['find', thread]); return found; },
@@ -74,7 +74,7 @@ test('a forward starts a session; replies in the DM thread continue it; answers 
   assert.match(f.posts[0].text, /^\*Done\*: see <x>\n\n_<paseo:\/\/agent\/A1\|open in Paseo> · on orange_$/);
   assert.deepEqual(f.reacts, [['+', '200.1', 'gear'], ['-', '200.1', 'gear']]);
   await lekam.onDm({ ...FWD, ts: '200.2', thread_ts: '200.1', text: 'go ahead', attachments: [] });
-  assert.deepEqual(f.calls.at(-1), ['run', 'A1', 'go ahead']);
+  assert.deepEqual(f.calls.at(-1), ['run', 'A1', 'go ahead', 'steer'], 'never interrupts a turn still running in Paseo');
   assert.equal(f.posts[1].text, 'reply to go ahead');
   assert.equal(f.posts[1].t, '200.1');
 });
@@ -86,19 +86,73 @@ test('after a restart the thread finds its session again by label', async () => 
   assert.equal(f.posts[0].text, 'old: and now?');
 });
 
-test('turns in one thread run one at a time; failures are reported in the thread', async () => {
-  const f = fakes();
-  const order = [];
-  let release;
-  const gate = new Promise((r) => { release = r; });
-  f.sessions.start = async () => ({ host: 'banana', handle: { id: 'A2', waitForFinish: async () => { order.push('first'); await gate; return { status: 'idle', lastMessage: 'one' }; }, run: async () => { order.push('second'); return { status: 'idle', lastMessage: 'two' }; } } });
+const tick = () => new Promise((r) => setTimeout(r, 5));
+/** A session whose first turn runs until `finish(result)`; `running` is what refresh() reports after it. */
+function gatedSession(f) {
+  const s = { sends: [], waits: 0, running: false };
+  let finish; let next = null;
+  s.finish = (r) => finish(r);
+  s.nextTurn = (r) => { next = r; };
+  s.handle = {
+    id: 'A2',
+    waitForFinish: async () => { s.waits++; if (s.waits === 1) return new Promise((r) => { finish = r; }); return next; },
+    send: async (text, o) => { s.sends.push([text, o?.activeTurnBehavior]); if (s.failSend) throw new Error('socket closed'); },
+    refresh: async () => ({ agent: { status: s.running ? 'running' : 'idle' } }),
+    run: async (text, o) => { f.calls.push(['run', 'A2', text, o?.activeTurnBehavior]); return { status: 'idle', lastMessage: `own turn: ${text}` }; },
+  };
+  f.sessions.start = async () => ({ host: 'banana', handle: s.handle });
+  return s;
+}
+const REPLY = (ts, text) => ({ ...FWD, ts, thread_ts: '200.1', text, attachments: [] });
+
+test('a reply while a turn runs steers it: sent straight in, no new turn, one answer for both', async () => {
+  const f = fakes(); const s = gatedSession(f);
   const lekam = new Lekam(f);
-  const a = lekam.onDm(FWD);
-  const b = lekam.onDm({ ...FWD, ts: '200.3', thread_ts: '200.1', text: 'also this', attachments: [] });
-  await new Promise((r) => setTimeout(r, 10));
-  assert.deepEqual(order, ['first']);
-  release(); await a; await b;
-  assert.deepEqual(order, ['first', 'second']);
+  const a = lekam.onDm(FWD); await tick();
+  await lekam.onDm(REPLY('200.3', 'use the test branch'));
+  assert.deepEqual(s.sends, [['use the test branch', 'steer']]);
+  assert.ok(f.reacts.some((r) => r[0] === '+' && r[1] === '200.3'), '⚙️ right away on the steer');
+  assert.equal(f.posts.length, 0);
+  s.finish({ status: 'idle', lastMessage: 'done, on the test branch' }); await a;
+  assert.equal(f.posts.length, 1);
+  assert.match(f.posts[0].text, /^done, on the test branch/);
+  assert.ok(!f.calls.some((c) => c[0] === 'run'), 'no separate turn');
+  assert.deepEqual(f.reacts.filter((r) => r[0] === '-').map((r) => r[1]).sort(), ['200.1', '200.3']);
+});
+
+test('a steer that lands just after the turn ended: its own turn is waited for, so the answer isn\'t lost', async () => {
+  const f = fakes(); const s = gatedSession(f);
+  const lekam = new Lekam(f);
+  const a = lekam.onDm(FWD); await tick();
+  const steer = lekam.onDm(REPLY('200.3', 'and the CSV one'));
+  s.running = true; s.nextTurn({ status: 'idle', lastMessage: 'CSV done too' });
+  s.finish({ status: 'idle', lastMessage: 'first answer' });
+  await steer; await a;
+  assert.equal(s.waits, 2, 'waited for the turn the late steer started');
+  assert.match(f.posts[0].text, /^CSV done too/);
+});
+
+test('after the turn, replies start their own turn (steer option, so a turn still running in Paseo is joined, not interrupted)', async () => {
+  const f = fakes(); const s = gatedSession(f);
+  const lekam = new Lekam(f);
+  const a = lekam.onDm(FWD); await tick();
+  s.finish({ status: 'idle', lastMessage: 'one' }); await a;
+  await lekam.onDm(REPLY('200.4', 'next'));
+  assert.deepEqual(f.calls.at(-1), ['run', 'A2', 'next', 'steer']);
+  assert.equal(f.posts[1].text, 'own turn: next');
+  assert.equal(s.sends.length, 0);
+});
+
+test('a steer that fails to send runs as its own turn after the current one; failures are reported in the thread', async () => {
+  const f = fakes(); const s = gatedSession(f);
+  const lekam = new Lekam(f);
+  const a = lekam.onDm(FWD); await tick();
+  s.failSend = true;
+  const b = lekam.onDm(REPLY('200.3', 'also this'));
+  await tick();
+  s.finish({ status: 'idle', lastMessage: 'one' });
+  await a; await b;
+  assert.deepEqual(f.posts.map((p) => p.text), ['one\n\n_<paseo://agent/A2|open in Paseo> · on banana_', 'own turn: also this']);
   const g = fakes();
   g.sessions.find = async () => { throw new Error('daemon unreachable'); };
   await new Lekam(g).onDm(FWD);

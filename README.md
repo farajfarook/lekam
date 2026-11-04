@@ -6,7 +6,7 @@
 
 1. Forward a Slack message to Lekam (or paste its link), with a note saying what you want.
 2. Lekam starts a Paseo session with the message's link and your note. The session reads the thread itself with its own Slack tools and does what you asked. With no note, it works out what the thread needs and suggests the next step.
-3. The DM thread under your forward is your chat with that session: your replies go to it, its replies come back there (⚙️ while it works).
+3. The DM thread under your forward is your chat with that session: your replies go to it, its replies come back there (⚙️ while it works). A reply while it's still working goes straight into the running turn (steering, not interrupting), and its answer covers both.
 
 **Which machine:** say "on orange" (or any host name) in your note to choose. Otherwise the session goes to the host with the most free capacity right now. Replies always go to the host the thread's session is on.
 

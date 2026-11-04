@@ -8,7 +8,7 @@ flowchart TD
     F -- "Yes" --> G["<b>Session</b> does it, with all<br/>your tools and skills.<br/>It posts to Slack itself if the job needs it"]
     F -- "No" --> H["<b>Session</b> explains the thread<br/>and suggests the next step"]
 
-    C -- "Reply in thread" --> R["<b>Lekam</b> passes it to the same session"]
+    C -- "Reply in thread" --> R["<b>Lekam</b> passes it to the same session,<br/>straight into the running turn<br/>if it's still working"]
     R --> G
 
     G --> K["<b>Lekam</b> puts the session's reply<br/>in your DM thread<br/>(⚙️ while it works)"]
