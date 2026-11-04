@@ -28,8 +28,8 @@ export class Sessions {
    * @param {{name:string,target:string}[]} o.hosts  first one is the fallback
    * @param {() => Promise<string|null>} [o.pickHost]  free-capacity choice when the note names no host
    */
-  constructor({ hosts, provider, cwd, label = 'Lekam', labelColor = 'amber', pickHost = async () => null, connect = null, mkdir = null, log = () => {} }) {
-    Object.assign(this, { hosts, provider, cwd, label, labelColor, pickHost, log });
+  constructor({ hosts, provider, thinking = null, cwd, label = 'Lekam', labelColor = 'amber', pickHost = async () => null, connect = null, mkdir = null, log = () => {} }) {
+    Object.assign(this, { hosts, provider, thinking, cwd, label, labelColor, pickHost, log });
     this.connectHost = connect ?? (async ({ name, target }) => {
       const { createHostClient } = await import('@getpaseo/client/node');
       const { createPaseoApi } = await import('@getpaseo/client');
@@ -95,7 +95,7 @@ export class Sessions {
       const { api, daemon } = await this.conn(host);
       // A user-set workspace title stops Paseo naming the workspace after the first lines of the prompt.
       const ws = await api.workspaces.create({ source: { kind: 'directory', path: this.cwd }, title });
-      const handle = await ws.agents.create({ config: { provider: this.provider }, title, labels: this.labels(thread), prompt });
+      const handle = await ws.agents.create({ config: { provider: this.provider, ...(this.thinking ? { thinkingOptionId: this.thinking } : {}) }, title, labels: this.labels(thread), prompt });
       await this.labelWorkspace(daemon, ws.id);
       return { handle, host };
     } catch (e) { await this.drop(host); throw new Error(`${host}: ${e.message}`); }

@@ -27,7 +27,8 @@ Needs Node 22.13+, a Paseo daemon, and a Slack app made from `config/slack-manif
 | `LEKAM_OWNER` | | your Slack user id; DMs from anyone else are ignored |
 | `LEKAM_HOSTS` | `<hostname>=ws://127.0.0.1:6767/ws` | Paseo daemons as `name=target`, comma-separated; `ssh://user@host` reaches another machine's daemon over SSH. The first is the fallback |
 | `LEKAM_CAPACITY_SCRIPT` | `~/.agents/skills/host-dispatch/scripts/capacity.mjs` | prints `--json` with the `best` host; missing or failing = first host |
-| `LEKAM_PROVIDER` | `pi/litellm/claude-sonnet-5-5` | `provider/model` for new sessions |
+| `LEKAM_PROVIDER` | `pi/litellm/claude-opus-5-5` | `provider/model` for new sessions |
+| `LEKAM_THINKING` | `xhigh` | reasoning level for new sessions (the provider's thinking option id) |
 | `LEKAM_CWD` | `~/work` | working directory for new sessions |
 | `LEKAM_TURN_TIMEOUT_MIN` | `120` | after this the session keeps going in Paseo; Lekam stops waiting |
 

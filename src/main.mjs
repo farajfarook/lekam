@@ -18,7 +18,8 @@ const slack = new Slack({ botToken: env('LEKAM_SLACK_BOT_TOKEN'), appToken: env(
 const hosts = parseHosts(env('LEKAM_HOSTS', `${os.hostname()}=ws://127.0.0.1:6767/ws`));
 const sessions = new Sessions({
   hosts,
-  provider: env('LEKAM_PROVIDER', 'pi/litellm/claude-sonnet-5-5'),
+  provider: env('LEKAM_PROVIDER', 'pi/litellm/claude-opus-5-5'),
+  thinking: env('LEKAM_THINKING', 'xhigh'),
   cwd: env('LEKAM_CWD', path.join(os.homedir(), 'work')),
   pickHost: capacityPicker(process.env.LEKAM_CAPACITY_SCRIPT ?? path.join(os.homedir(), '.agents/skills/host-dispatch/scripts/capacity.mjs'), hosts.map((h) => h.name)),
   log,
@@ -28,6 +29,6 @@ const lekam = new Lekam({ slack, sessions, timeoutMs: Number(env('LEKAM_TURN_TIM
 for (const h of hosts) await sessions.conn(h.name).then(() => log('info', `paseo ${h.name}: connected (${h.target})`), (e) => log('warn', `paseo ${h.name}: ${e.message} (retried on use)`));
 await slack.start((m) => lekam.onDm(m));
 lekam.ownerName = await slack.ownerName();
-log('info', `lekam ready: DMs from ${lekam.ownerName} go to ${sessions.provider} sessions on ${hosts.map((h) => h.name).join(', ')}`);
+log('info', `lekam ready: DMs from ${lekam.ownerName} go to ${sessions.provider} (${sessions.thinking} reasoning) sessions on ${hosts.map((h) => h.name).join(', ')}`);
 
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, async () => { await slack.stop().catch(() => {}); await sessions.close(); process.exit(0); });

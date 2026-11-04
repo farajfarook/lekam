@@ -129,12 +129,13 @@ test('a new session gets its own titled workspace on the chosen host, with the L
     api: { workspaces: { create: async (o) => { calls.push(['ws', name, o]); return { id: `wks_${name}`, agents: { create: async (a) => { calls.push(['agent', name, a]); return { id: 'A1' }; } } }; } } },
     daemon: { listWorkspaceLabels: async () => ({ labels }), setWorkspaceLabel: async (o) => { calls.push(['label', name, o]); } },
   });
-  const s = new Sessions({ hosts: [{ name: 'banana', target: 'ws://x' }, { name: 'orange', target: 'ssh://root@orange' }], provider: 'pi/m', cwd: '/w', connect, mkdir: async (h) => calls.push(['mkdir', h.name]) });
+  const s = new Sessions({ hosts: [{ name: 'banana', target: 'ws://x' }, { name: 'orange', target: 'ssh://root@orange' }], provider: 'pi/m', thinking: 'xhigh', cwd: '/w', connect, mkdir: async (h) => calls.push(['mkdir', h.name]) });
   const r = await s.start('200.1', { title: 'Fix the failing test', prompt: 'p', host: 'orange' });
   assert.deepEqual([r.handle.id, r.host], ['A1', 'orange']);
   assert.deepEqual(calls[0], ['mkdir', 'orange']);
   assert.deepEqual(calls[1], ['ws', 'orange', { source: { kind: 'directory', path: '/w' }, title: 'Fix the failing test' }]);
   assert.deepEqual(calls[2][2].labels, { lekam: 'dm', lekam_thread: '200.1' });
+  assert.deepEqual(calls[2][2].config, { provider: 'pi/m', thinkingOptionId: 'xhigh' });
   assert.deepEqual(calls[3], ['label', 'orange', { workspaceId: 'wks_orange', label: { name: 'Lekam', color: 'amber' }, assigned: true }]);
   labels.push({ name: 'lekam', color: 'teal' });
   await s.start('200.2', { title: 't', prompt: 'p', host: 'banana' });
